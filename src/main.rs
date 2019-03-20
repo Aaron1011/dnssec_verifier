@@ -50,13 +50,13 @@ fn main() {
         _ => None,
     };
 
-    if !verify(&pubkey.unwrap(), rrs, &sig.unwrap()) {
+    if !verify_rrsig(&pubkey.unwrap(), rrs, &sig.unwrap()) {
         println!("Verification failed");
     }
     println!("Verification success");
 }
 
-fn verify(pubkey: &rdata::Dnskey, rrs: Vec<impl Compose>, rrsig: &rdata::Rrsig) -> bool {
+fn verify_rrsig(pubkey: &rdata::Dnskey, rrs: Vec<impl Compose>, rrsig: &rdata::Rrsig) -> bool {
     let rrsig_rdata_nosig = rdata::Rrsig::new(
         rrsig.type_covered(),
         rrsig.algorithm(),
@@ -100,5 +100,58 @@ fn verify(pubkey: &rdata::Dnskey, rrs: Vec<impl Compose>, rrsig: &rdata::Rrsig) 
             debug!("Verification Error: {}", err);
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn init_logger() {
+        let _ = env_logger::builder().is_test(true).try_init();
+    }
+
+    #[test]
+    fn verify_rrsig_good_signature() {
+        init_logger();
+
+        let zsk = take_one_rr("cloudflare.com.         2992    IN      DNSKEY  257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==");
+        let cdnskey = take_one_rr("cloudflare.com.         3600    IN      CDNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==").unwrap();
+        let rrsig = take_one_rr("cloudflare.com.         3600    IN      RRSIG   CDNSKEY 13 2 3600 20190408024840 20190207024840 2371 cloudflare.com. odj8zT4s/4qlGiU6gozw1cBupGxwWf01E+l9cQKqUegbe+CLeg59tdCmIFbGMBFb2tTmTTw3F9vTwb21hwJDUg==");
+
+        let rrs = vec![cdnskey];
+
+        let pubkey: Option<rdata::Dnskey> = match zsk.unwrap().into_data() {
+            MasterRecordData::Dnskey(rr) => Some(rr),
+            _ => None,
+        };
+        let sig: Option<rdata::Rrsig> = match rrsig.unwrap().into_data() {
+            MasterRecordData::Rrsig(rr) => Some(rr),
+            _ => None,
+        };
+
+        assert!(verify_rrsig(&pubkey.unwrap(), rrs, &sig.unwrap()));
+    }
+
+    #[test]
+    fn verify_rrsig_bad_signature() {
+        init_logger();
+
+        let zsk = take_one_rr("cloudflare.com.         2992    IN      DNSKEY  257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==");
+        let cdnskey = take_one_rr("cloudflare.com.         3600    IN      CDNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==").unwrap();
+        let rrsig = take_one_rr("cloudflare.com.         3600    IN      RRSIG   CDNSKEY 13 2 3600 20190408024840 20190207024840 2371 cloudflare.com. bad+signatur++++gozw1cBupGxwWf01E+l9cQKqUegbe+CLeg59tdCmIFbGMBFb2tTmTTw3F9vTwb21hwJDUg==");
+
+        let rrs = vec![cdnskey];
+
+        let pubkey: Option<rdata::Dnskey> = match zsk.unwrap().into_data() {
+            MasterRecordData::Dnskey(rr) => Some(rr),
+            _ => None,
+        };
+        let sig: Option<rdata::Rrsig> = match rrsig.unwrap().into_data() {
+            MasterRecordData::Rrsig(rr) => Some(rr),
+            _ => None,
+        };
+
+        assert!(!verify_rrsig(&pubkey.unwrap(), rrs, &sig.unwrap()));
     }
 }
