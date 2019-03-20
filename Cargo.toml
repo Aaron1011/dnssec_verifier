@@ -1,0 +1,20 @@
+[package]
+name = "ring_test"
+version = "0.1.0"
+authors = ["Vicky Shrestha <vicky@cloudflare.com>"]
+edition = "2018"
+
+[dependencies]
+log = "*"
+env_logger = "*"
+ring = "*"
+untrusted = "*"
+domain= {git = "https://github.com/vendemiat/domain", branch="vicky/enable_dnssec_query"}
+bytes = "*"
+base64 = "*"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
