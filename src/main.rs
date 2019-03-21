@@ -57,9 +57,10 @@ fn main() {
 }
 
 fn verify_rrsig(pubkey: &rdata::Dnskey, rrs: Vec<impl Compose>, rrsig: &rdata::Rrsig) -> bool {
+    let rrsig_algo = rrsig.algorithm();
     let rrsig_rdata_nosig = rdata::Rrsig::new(
         rrsig.type_covered(),
-        rrsig.algorithm(),
+        rrsig_algo,
         rrsig.labels(),
         rrsig.original_ttl(),
         rrsig.expiration(),
@@ -85,22 +86,68 @@ fn verify_rrsig(pubkey: &rdata::Dnskey, rrs: Vec<impl Compose>, rrsig: &rdata::R
     // Add 0x4 idenfitifer to the pubkey
     // required for crypto libraries to recognize
     // TODO: ECDSA only ?
-    let mut key: Vec<u8> = vec![0x4];
-    let mut a = Vec::from_buf(pubkey.public_key().clone().into_buf());
-    key.append(&mut a);
+    let mut key: Vec<u8>;
+    if rrsig_algo == 13 {
+        key = vec![0x4];
+        let mut a = Vec::from_buf(pubkey.public_key().clone().into_buf());
+        key.append(&mut a);
+    } else {
+        key = Vec::from_buf(pubkey.public_key().clone().into_buf());
+    }
 
-    match signature::verify(
-        &signature::ECDSA_P256_SHA256_FIXED,
-        untrusted::Input::from(&key),
-        untrusted::Input::from(&message),
-        untrusted::Input::from(&sig),
-    ) {
+    let message = untrusted::Input::from(&message);
+    let sig = untrusted::Input::from(&sig);
+
+    let res = match rrsig_algo.to_int() {
+        8 => {
+            // Extract public key exponent and modulus
+            let (e, m) = rsa_exponent_modulus(&key).unwrap();
+            let e = untrusted::Input::from(e);
+            let m = untrusted::Input::from(m);
+            signature::primitive::verify_rsa(
+                &signature::RSA_PKCS1_2048_8192_SHA256,
+                (m, e),
+                message,
+                sig,
+            )
+        }
+        13 => {
+            let key = untrusted::Input::from(&key);
+            signature::verify(&signature::ECDSA_P256_SHA256_FIXED, key, message, sig)
+        }
+        _ => {
+            debug!("unknown algorithm {:#?}", rrsig_algo);
+            Err(ring::error::Unspecified)
+        }
+    };
+
+    match res {
         Ok(_) => true,
         Err(err) => {
-            debug!("Verification Error: {}", err);
+            debug!("verification failed: {}", err);
             false
         }
     }
+}
+
+// return public key exponent and modulues from the dnskey encoded rsa pub key
+// see https://tools.ietf.org/html/rfc3110#section-2 for dnskey format
+// following code copied from
+// https://github.com/bluejekyll/trust-dns/blob/master/crates/proto/src/rr/dnssec/rsa_public_key.rs#L16
+fn rsa_exponent_modulus(input: &[u8]) -> Option<(&[u8], &[u8])> {
+    let (e_len_len, e_len) = match input.get(0) {
+        Some(&0) if input.len() >= 3 => (3, (usize::from(input[1]) << 8) | usize::from(input[2])),
+        Some(e_len) if *e_len != 0 => (1, usize::from(*e_len)),
+        _ => {
+            return None;
+        }
+    };
+
+    if input.len() < e_len_len + e_len {
+        return None;
+    };
+
+    Some(input[e_len_len..].split_at(e_len))
 }
 
 #[cfg(test)]
@@ -112,7 +159,7 @@ mod tests {
     }
 
     #[test]
-    fn verify_rrsig_good_signature() {
+    fn verify_rrsig_ecdsa_good_signature() {
         init_logger();
 
         let zsk = take_one_rr("cloudflare.com.         2992    IN      DNSKEY  257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==");
@@ -134,7 +181,7 @@ mod tests {
     }
 
     #[test]
-    fn verify_rrsig_bad_signature() {
+    fn verify_rrsig_ecdsa_bad_signature() {
         init_logger();
 
         let zsk = take_one_rr("cloudflare.com.         2992    IN      DNSKEY  257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==");
@@ -142,6 +189,50 @@ mod tests {
         let rrsig = take_one_rr("cloudflare.com.         3600    IN      RRSIG   CDNSKEY 13 2 3600 20190408024840 20190207024840 2371 cloudflare.com. bad+signatur++++gozw1cBupGxwWf01E+l9cQKqUegbe+CLeg59tdCmIFbGMBFb2tTmTTw3F9vTwb21hwJDUg==");
 
         let rrs = vec![cdnskey];
+
+        let pubkey: Option<rdata::Dnskey> = match zsk.unwrap().into_data() {
+            MasterRecordData::Dnskey(rr) => Some(rr),
+            _ => None,
+        };
+        let sig: Option<rdata::Rrsig> = match rrsig.unwrap().into_data() {
+            MasterRecordData::Rrsig(rr) => Some(rr),
+            _ => None,
+        };
+
+        assert!(!verify_rrsig(&pubkey.unwrap(), rrs, &sig.unwrap()));
+    }
+
+    #[test]
+    fn verify_rrsig_rsa_good_signature() {
+        init_logger();
+
+        let soa = take_one_rr(".                       86400   IN      SOA     a.root-servers.net. nstld.verisign-grs.com. 2019032001 1800 900 604800 86400").unwrap();
+        let zsk = take_one_rr(".                       172800  IN      DNSKEY  256 3 8 AwEAAcH+axCdUOsTc9o+jmyVq5rsGTh1EcatSumPqEfsPBT+whyj0/UhD7cWeixV9Wqzj/cnqs8iWELqhdzGX41ZtaNQUfWNfOriASnWmX2D9m/EunplHu8nMSlDnDcT7+llE9tjk5HI1Sr7d9N16ZTIrbVALf65VB2ABbBG39dyAb7tz21PICJbSp2cd77UF7NFqEVkqohl/LkDw+7Apalmp0qAQT1Mgwi2cVxZMKUiciA6EqS+KNajf0A6olO2oEhZnGGY6b1LTg34/YfHdiIIZQqAfqbieruCGHRiSscC2ZE7iNreL/76f4JyIEUNkt6bQA29JsegxorLzQkpF7NKqZc=");
+        let rrsig = take_one_rr(".                       86400   IN      RRSIG   SOA 8 0 86400 20190402170000 20190320160000 16749 . tmdkfxbiKWgi0oHGp2ti1fvOmQNIlxZ/c65A0AmdiaHaH9MonVOLkpNYiz1JRXKNcXmdtLto1IikVwIyGCPLIrzr77yMawrGAhb7KisTbSGGx7czlyv9Qdmi4wTdO/6fq73DTGHKVYGILM15kFIdAEEHVP8OISXsBJwQOhvXlHIeOtC4oeR63RBNfOSS1V9hLs17K9OjK0EFxerCnOEoZHeFIhzqvWRXCZ4YVOEfpSOvPWRV+D/RfDTBPaf1U5qFu9H5WcUzyoUJakukvg1+WTUZ0LmdkFplOrel+yAd++QGbtguX8LftgY7qlDMuY7FvKqb3+TsAAvTXRot4tE1fw==");
+
+        let rrs = vec![soa];
+
+        let pubkey: Option<rdata::Dnskey> = match zsk.unwrap().into_data() {
+            MasterRecordData::Dnskey(rr) => Some(rr),
+            _ => None,
+        };
+        let sig: Option<rdata::Rrsig> = match rrsig.unwrap().into_data() {
+            MasterRecordData::Rrsig(rr) => Some(rr),
+            _ => None,
+        };
+
+        assert!(verify_rrsig(&pubkey.unwrap(), rrs, &sig.unwrap()));
+    }
+
+    #[test]
+    fn verify_rrsig_rsa_bad_signature() {
+        init_logger();
+
+        let soa = take_one_rr(".                       86400   IN      SOA     a.root-servers.net. nstld.verisign-grs.com. 2019032001 1800 900 604800 86400").unwrap();
+        let zsk = take_one_rr(".                       172800  IN      DNSKEY  256 3 8 +++BadSignature+++o+jmyVq5rsGTh1EcatSumPqEfsPBT+whyj0/UhD7cWeixV9Wqzj/cnqs8iWELqhdzGX41ZtaNQUfWNfOriASnWmX2D9m/EunplHu8nMSlDnDcT7+llE9tjk5HI1Sr7d9N16ZTIrbVALf65VB2ABbBG39dyAb7tz21PICJbSp2cd77UF7NFqEVkqohl/LkDw+7Apalmp0qAQT1Mgwi2cVxZMKUiciA6EqS+KNajf0A6olO2oEhZnGGY6b1LTg34/YfHdiIIZQqAfqbieruCGHRiSscC2ZE7iNreL/76f4JyIEUNkt6bQA29JsegxorLzQkpF7NKqZc=");
+        let rrsig = take_one_rr(".                       86400   IN      RRSIG   SOA 8 0 86400 20190402170000 20190320160000 16749 . tmdkfxbiKWgi0oHGp2ti1fvOmQNIlxZ/c65A0AmdiaHaH9MonVOLkpNYiz1JRXKNcXmdtLto1IikVwIyGCPLIrzr77yMawrGAhb7KisTbSGGx7czlyv9Qdmi4wTdO/6fq73DTGHKVYGILM15kFIdAEEHVP8OISXsBJwQOhvXlHIeOtC4oeR63RBNfOSS1V9hLs17K9OjK0EFxerCnOEoZHeFIhzqvWRXCZ4YVOEfpSOvPWRV+D/RfDTBPaf1U5qFu9H5WcUzyoUJakukvg1+WTUZ0LmdkFplOrel+yAd++QGbtguX8LftgY7qlDMuY7FvKqb3+TsAAvTXRot4tE1fw==");
+
+        let rrs = vec![soa];
 
         let pubkey: Option<rdata::Dnskey> = match zsk.unwrap().into_data() {
             MasterRecordData::Dnskey(rr) => Some(rr),
