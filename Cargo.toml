@@ -1,5 +1,5 @@
 [package]
-name = "ring_test"
+name = "dnssec_verifier"
 version = "0.1.0"
 authors = ["Vicky Shrestha <vicky@cloudflare.com>"]
 edition = "2018"
