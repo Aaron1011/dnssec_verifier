@@ -215,6 +215,17 @@ mod tests {
     }
 
     #[test]
+    fn verify_rrsig_rsa_good_signature_1024() {
+        init_logger();
+
+        assert!(verify_rrsig_helper(
+        "nz. 3046 IN DNSKEY 256 3 8 AwEAAbhtcqZIlIYHyCzbBU8sa3W8f+lTYW0gFa+E/VjNJoRJ0FUrClmMI9EPTqfM1ujAkNIbewRC36GHSQ65jlwonCafO4eHbbhkBMuuKvMe2bf7f/csQvQ1PS1kNgl5fRFVIrDbne9I5kAcyVXoSMzRipGClHkHn+yNi/FGkIwNjE0H",
+        "nz. 86400 IN RRSIG SOA 8 1 86400 20190406023219 20190322235821 16825 nz. XHH+w9a3vbmLFLvbi/5hXmQzCzIigGBZNIFDUOhOqaDbXbdSr602/iAglp7FXpcNxHefd2zfTM7kGQcuqbHwE72Kj5mcP8s+OHzWm1svxgMKQ0LJ6QnLy5B8DWR81bGEUuXIojNe4kRnUnJVJFew/7LCx6S4U51UprcrHuryYI8=",
+        vec!["nz. 86400 IN SOA loopback.dns.net.nz. soa.nzrs.net.nz. 2019032353 900 300 604800 3600"],
+        ));
+    }
+
+    #[test]
     fn verify_rrsig_ecdsa_multiple_rr_good_signature() {
         init_logger();
 
