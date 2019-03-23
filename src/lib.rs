@@ -1,11 +1,22 @@
 use bytes::buf::FromBuf;
 use bytes::IntoBuf;
 use domain::core::bits::compose::Compose;
+use domain::core::bits::name::ToDname;
+use domain::core::bits::rdata::RecordData;
+use domain::core::bits::record::Record;
 use domain::core::rdata;
 use log::debug;
 use ring::signature;
 
-pub fn verify_rrsig(pubkey: &rdata::Dnskey, rrs: Vec<impl Compose>, rrsig: &rdata::Rrsig) -> bool {
+pub fn verify_rrsig<N, D>(
+    pubkey: &rdata::Dnskey,
+    rrs: Vec<Record<N, D>>,
+    rrsig: &rdata::Rrsig,
+) -> bool
+where
+    N: ToDname,
+    D: RecordData,
+{
     let rrsig_algo = rrsig.algorithm();
     let rrsig_rdata_nosig = rdata::Rrsig::new(
         rrsig.type_covered(),
@@ -27,9 +38,10 @@ pub fn verify_rrsig(pubkey: &rdata::Dnskey, rrs: Vec<impl Compose>, rrsig: &rdat
 
     // append the RR
     // TODO: sort
-    for rr in rrs {
+    for mut rr in rrs {
         // set original TTL
-        //rr.set_ttl(rrsig.original_ttl());
+        rr.set_ttl(rrsig.original_ttl());
+
         rr.compose(&mut message);
     }
     let sig = Vec::from_buf(rrsig.signature().clone().into_buf());
