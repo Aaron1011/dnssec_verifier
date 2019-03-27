@@ -12,6 +12,7 @@ untrusted = "*"
 domain= {git = "https://github.com/vendemiat/domain", branch="vicky/enable_dnssec_query"}
 bytes = "*"
 base64 = "*"
+chrono = "0.4"
 
 [profile.dev]
 panic = "abort"

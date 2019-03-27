@@ -1,9 +1,11 @@
 use bytes::buf::FromBuf;
 use bytes::IntoBuf;
+use chrono::Utc;
 use domain::core::bits::compose::Compose;
 use domain::core::bits::name::{DnameBuilder, Label, ToDname};
 use domain::core::bits::rdata::RecordData;
 use domain::core::bits::record::Record;
+use domain::core::bits::serial::Serial;
 use domain::core::rdata;
 use log::debug;
 use ring::signature;
@@ -21,17 +23,26 @@ where
     D: RecordData + Clone,
 {
     let rrsig_algo = rrsig.algorithm();
+    let inception = rrsig.inception();
+    let expiration = rrsig.expiration();
+
     let rrsig_rdata_nosig = rdata::Rrsig::new(
         rrsig.type_covered(),
         rrsig_algo,
         rrsig.labels(),
         rrsig.original_ttl(),
-        rrsig.expiration(),
-        rrsig.inception(),
+        expiration,
+        inception,
         rrsig.key_tag(),
         rrsig.signer_name().clone(),
         bytes::Bytes::new(),
     );
+
+    // return false if the rrsig inception and expiration is out of bounds
+    // to now
+    if !rrsig_datetime_is_valid(inception, expiration) {
+        return false;
+    }
 
     // buf to be signed/verified
     let mut message = vec![];
@@ -163,6 +174,13 @@ fn rsa_exponent_modulus(input: &[u8]) -> Option<(&[u8], &[u8])> {
     };
 
     Some(input[e_len_len..].split_at(e_len))
+}
+
+fn rrsig_datetime_is_valid(inception: Serial, expiration: Serial) -> bool {
+    let now = Utc::now().timestamp() as u32;
+    let now = Serial(now);
+
+    now >= inception && expiration >= now
 }
 
 #[cfg(test)]
@@ -345,5 +363,30 @@ mod tests {
           "cloudflare.com. 600 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
         ]
         ));
+    }
+
+    use chrono::Duration;
+    #[test]
+    fn rrsig_datetime_good() {
+        let offset = 1;
+        let i = Serial((Utc::now() - Duration::days(offset)).timestamp() as u32);
+        let e = Serial((Utc::now() + Duration::days(offset)).timestamp() as u32);
+        assert!(rrsig_datetime_is_valid(i, e));
+    }
+
+    #[test]
+    fn rrsig_datetime_expired() {
+        let offset = 1;
+        let i = Serial((Utc::now() - Duration::days(offset)).timestamp() as u32);
+        let e = Serial((Utc::now() - Duration::days(offset)).timestamp() as u32);
+        assert!(!rrsig_datetime_is_valid(i, e));
+    }
+
+    #[test]
+    fn rrsig_datetime_incepted_in_future() {
+        let offset = 1;
+        let i = Serial((Utc::now() + Duration::days(offset)).timestamp() as u32);
+        let e = Serial((Utc::now() + Duration::days(offset)).timestamp() as u32);
+        assert!(!rrsig_datetime_is_valid(i, e));
     }
 }
