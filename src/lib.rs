@@ -8,14 +8,17 @@ use domain::core::rdata;
 use log::debug;
 use ring::signature;
 
+// currently on support algorith 8 and 13
+// RSA is restricted to >2048 bit because of ring
+// TODO: Add inception and expiry check
 pub fn verify_rrsig<N, D>(
     pubkey: &rdata::Dnskey,
     rrs: Vec<Record<N, D>>,
     rrsig: &rdata::Rrsig,
 ) -> bool
 where
-    N: ToDname,
-    D: RecordData,
+    N: ToDname + Clone,
+    D: RecordData + Clone,
 {
     let rrsig_algo = rrsig.algorithm();
     let rrsig_rdata_nosig = rdata::Rrsig::new(
@@ -36,14 +39,10 @@ where
     // Add RRSIG rdata without the signature
     rrsig_rdata_nosig.compose(&mut message);
 
-    // append the RR
-    // TODO: sort
-    for mut rr in rrs {
-        // set original TTL
-        rr.set_ttl(rrsig.original_ttl());
+    // rrset
+    let mut sorted_rrset_bytes = prepare_rrset_to_sign(rrs, rrsig.original_ttl());
+    message.append(&mut sorted_rrset_bytes);
 
-        rr.compose(&mut message);
-    }
     let sig = Vec::from_buf(rrsig.signature().clone().into_buf());
 
     // Add 0x4 idenfitifer to the ECDSA pubkey
@@ -92,7 +91,46 @@ where
     }
 }
 
-// return public key exponent and modulues from the dnskey encoded rsa pub key
+// prepares dns message from sorted rrset
+// sorting is done as per https://tools.ietf.org/html/rfc4034#section-6.3
+// TODO: Verify the owner is same
+fn prepare_rrset_to_sign<N, D>(rrs: Vec<Record<N, D>>, ttl: u32) -> Vec<u8>
+where
+    N: ToDname + Clone,
+    D: RecordData + Clone,
+{
+    let mut rr_data: Vec<Vec<u8>> = vec![vec![0]; rrs.len()];
+    for (i, rr) in rrs.iter().enumerate() {
+        let mut b = vec![];
+        let mut rr = rr.clone();
+
+        rr.set_ttl(ttl);
+        rr.compose(&mut b);
+        rr_data[i] = b;
+    }
+
+    // sort by member byte array
+    // a[0] = vec![4,5,6]
+    // a[1] = vec![1,2,3]
+    // returns
+    // a[0] = vec![1,2,3]
+    // a[1] = vec![4,5,6]
+    rr_data.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+    // Collapse sorted multi dimension byte vector
+    // a[0] = vec![1,2,3]
+    // a[1] = vec![4,5,6]
+    // returns
+    // c = vec![1,2,3,4,5,6]
+    let mut sorted_rr_bytes = vec![];
+    for mut v in rr_data {
+        sorted_rr_bytes.append(&mut v);
+    }
+
+    sorted_rr_bytes
+}
+
+// returns public key exponent and modulus from the dnskey encoded rsa pub key
 // see https://tools.ietf.org/html/rfc3110#section-2 for dnskey format
 // following code copied from
 // https://github.com/bluejekyll/trust-dns/blob/master/crates/proto/src/rr/dnssec/rsa_public_key.rs#L16
@@ -215,6 +253,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn verify_rrsig_rsa_good_signature_1024() {
         init_logger();
 
