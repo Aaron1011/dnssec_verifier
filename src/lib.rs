@@ -1,7 +1,7 @@
 use bytes::buf::FromBuf;
 use bytes::IntoBuf;
 use domain::core::bits::compose::Compose;
-use domain::core::bits::name::ToDname;
+use domain::core::bits::name::{DnameBuilder, Label, ToDname};
 use domain::core::bits::rdata::RecordData;
 use domain::core::bits::record::Record;
 use domain::core::rdata;
@@ -102,8 +102,23 @@ where
     let mut rr_data: Vec<Vec<u8>> = vec![vec![0]; rrs.len()];
     for (i, rr) in rrs.iter().enumerate() {
         let mut b = vec![];
-        let mut rr = rr.clone();
+        let rr = rr.clone();
 
+        // build a new Dname with lowercased labels
+        let mut dname_builder = DnameBuilder::new();
+        for l in rr.owner().to_name().iter() {
+            let m: Vec<u8> = l.iter().map(u8::to_ascii_lowercase).collect();
+            let l = Label::from_slice(&m).unwrap();
+            dname_builder.append_label(l).unwrap();
+        }
+
+        // build a new record with lowercased labels
+        let mut rr = Record::new(
+            dname_builder.into_dname().unwrap(),
+            rr.class(),
+            ttl,
+            rr.into_data(),
+        );
         rr.set_ttl(ttl);
         rr.compose(&mut b);
         rr_data[i] = b;
@@ -282,11 +297,11 @@ mod tests {
         init_logger();
 
         assert!(verify_rrsig_helper(
-        "CloudFlare.com. 3600 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
+        "cloudFlare.com. 3600 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
         "cloudflare.com. 3600 IN RRSIG DNSKEY 13 2 3600 20190408024840 20190207024840 2371 cloudflare.com. IaVqBxfybMOKi35lu6sa+iizrcTi8T7f/Jhgss1qcrD7FFaQZZAMtBXVQxq2uZXLxubLP+Zt9bCYUxMOxnb/Jw==",
         vec![
-          "cloudflare.com. 3600 IN DNSKEY 256 3 13 oJMRESz5E4gYzS/q6XDrvU1qMPYIjCWzJaOau8XNEZeqCYKD5ar0IRd8KqXXFJkqmVfRvMGPmM1x8fGAa2XhSA==",
-          "cloudflare.com. 3600 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
+          "Cloudflare.com. 3600 IN DNSKEY 256 3 13 oJMRESz5E4gYzS/q6XDrvU1qMPYIjCWzJaOau8XNEZeqCYKD5ar0IRd8KqXXFJkqmVfRvMGPmM1x8fGAa2XhSA==",
+          "Cloudflare.com. 3600 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
         ]
         ));
     }
