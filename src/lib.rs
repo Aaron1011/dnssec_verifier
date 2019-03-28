@@ -368,6 +368,7 @@ mod tests {
     use chrono::Duration;
     #[test]
     fn rrsig_datetime_good() {
+        init_logger();
         let offset = 1;
         let i = Serial((Utc::now() - Duration::days(offset)).timestamp() as u32);
         let e = Serial((Utc::now() + Duration::days(offset)).timestamp() as u32);
@@ -376,6 +377,7 @@ mod tests {
 
     #[test]
     fn rrsig_datetime_expired() {
+        init_logger();
         let offset = 1;
         let i = Serial((Utc::now() - Duration::days(offset)).timestamp() as u32);
         let e = Serial((Utc::now() - Duration::days(offset)).timestamp() as u32);
@@ -384,6 +386,7 @@ mod tests {
 
     #[test]
     fn rrsig_datetime_incepted_in_future() {
+        init_logger();
         let offset = 1;
         let i = Serial((Utc::now() + Duration::days(offset)).timestamp() as u32);
         let e = Serial((Utc::now() + Duration::days(offset)).timestamp() as u32);
