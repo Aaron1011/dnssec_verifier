@@ -8,7 +8,7 @@ use domain::core::bits::record::Record;
 use domain::core::bits::serial::Serial;
 use domain::core::rdata;
 use log::debug;
-use ring::signature;
+use ring::{rand, signature};
 
 // currently on support algorith 8 and 13
 // RSA is restricted to >2048 bit because of ring
@@ -181,6 +181,24 @@ fn rrsig_datetime_is_valid(inception: Serial, expiration: Serial) -> bool {
     let now = Serial(now);
 
     now >= inception && expiration >= now
+}
+
+fn ecdsa_sign(
+    rng: &rand::SystemRandom,
+    key_pair: ring::signature::EcdsaKeyPair,
+    message: Vec<u8>,
+) -> Vec<u8> {
+    key_pair
+        .sign(rng, untrusted::Input::from(&message))
+        .unwrap()
+        .as_ref()
+        .to_owned()
+}
+
+fn ecdsa_keypair(rng: &rand::SystemRandom) -> ring::signature::EcdsaKeyPair {
+    let alg = &signature::ECDSA_P256_SHA256_FIXED_SIGNING;
+    let pkcs8 = signature::EcdsaKeyPair::generate_pkcs8(alg, rng).unwrap();
+    signature::EcdsaKeyPair::from_pkcs8(alg, untrusted::Input::from(pkcs8.as_ref())).unwrap()
 }
 
 #[cfg(test)]
@@ -391,5 +409,38 @@ mod tests {
         let i = Serial((Utc::now() + Duration::days(offset)).timestamp() as u32);
         let e = Serial((Utc::now() + Duration::days(offset)).timestamp() as u32);
         assert!(!rrsig_datetime_is_valid(i, e));
+    }
+
+    use domain::core::bits::name::Dname;
+    use domain::core::iana::rtype::Rtype;
+    use domain::core::iana::secalg::SecAlg;
+    use std::str::FromStr;
+    #[test]
+    fn ecdsa_keypair_test() {
+        init_logger();
+
+        let rng = rand::SystemRandom::new();
+        let keypair = ecdsa_keypair(&rng);
+        let message = Vec::from("hello world");
+        debug!("keypair     : {:?}", keypair);
+        debug!("message     : {:?}", message);
+        let signature = ecdsa_sign(&rng, keypair, message);
+        debug!("signature   : {:?}", signature);
+
+        let offset = 1;
+        let i = Serial((Utc::now() - Duration::days(offset)).timestamp() as u32);
+        let e = Serial((Utc::now() + Duration::days(offset)).timestamp() as u32);
+        let rrsig = rdata::Rrsig::new(
+            Rtype::Dnskey,
+            SecAlg::EcdsaP256Sha256,
+            2,
+            3600,
+            e,
+            i,
+            2371,
+            Dname::from_str("cloudflare.com").unwrap(),
+            bytes::Bytes::from(signature),
+        );
+        debug!("rrsig : {}", rrsig);
     }
 }
