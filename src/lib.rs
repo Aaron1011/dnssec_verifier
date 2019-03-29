@@ -201,6 +201,24 @@ fn ecdsa_keypair(rng: &rand::SystemRandom) -> ring::signature::EcdsaKeyPair {
     signature::EcdsaKeyPair::from_pkcs8(alg, untrusted::Input::from(pkcs8.as_ref())).unwrap()
 }
 
+// copied from https://github.com/miekg/dns/blob/master/dnssec.go#L135
+pub fn dnskey_keytag(dnskey: rdata::Dnskey) -> u16 {
+    let mut buf = vec![];
+    dnskey.compose(&mut buf);
+    let mut keytag: u32 = 0;
+
+    for (i, v) in buf.iter().enumerate() {
+        if i & 1 != 0 {
+            keytag += u32::from(*v);
+        } else {
+            keytag += u32::from(*v) << 8;
+        }
+    }
+    keytag += (keytag >> 16) & 0xffff;
+    keytag &= 0xffff;
+    keytag as u16
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,6 +429,18 @@ mod tests {
         assert!(!rrsig_datetime_is_valid(i, e));
     }
 
+    #[test]
+    fn dnskey_keytag_test() {
+        let dnskey = take_one_rr("cloudflare.com. 600 IN DNSKEY 256 3 13 oJMRESz5E4gYzS/q6XDrvU1qMPYIjCWzJaOau8XNEZeqCYKD5ar0IRd8KqXXFJkqmVfRvMGPmM1x8fGAa2XhSA==").unwrap();
+        let pubkey: Option<rdata::Dnskey> = match dnskey.into_data() {
+            MasterRecordData::Dnskey(rr) => Some(rr),
+            _ => None,
+        };
+        let keytag = dnskey_keytag(pubkey.unwrap());
+        debug!("{}", keytag);
+        assert_eq!(keytag, 34505);
+    }
+
     use domain::core::bits::name::Dname;
     use domain::core::iana::rtype::Rtype;
     use domain::core::iana::secalg::SecAlg;
@@ -426,6 +456,9 @@ mod tests {
         debug!("message     : {:?}", message);
         let signature = ecdsa_sign(&rng, keypair, message);
         debug!("signature   : {:?}", signature);
+        let owner = Dname::from_str("cloudflare.com").unwrap();
+        let ttl = 3600;
+        let keyid = 2371;
 
         let offset = 1;
         let i = Serial((Utc::now() - Duration::days(offset)).timestamp() as u32);
@@ -433,12 +466,12 @@ mod tests {
         let rrsig = rdata::Rrsig::new(
             Rtype::Dnskey,
             SecAlg::EcdsaP256Sha256,
-            2,
-            3600,
+            owner.label_count() as u8,
+            ttl,
             e,
             i,
-            2371,
-            Dname::from_str("cloudflare.com").unwrap(),
+            keyid,
+            owner,
             bytes::Bytes::from(signature),
         );
         debug!("rrsig : {}", rrsig);
