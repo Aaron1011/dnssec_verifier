@@ -185,7 +185,7 @@ fn rrsig_datetime_is_valid(inception: Serial, expiration: Serial) -> bool {
 
 fn ecdsa_sign(
     rng: &rand::SystemRandom,
-    key_pair: ring::signature::EcdsaKeyPair,
+    key_pair: &ring::signature::EcdsaKeyPair,
     message: Vec<u8>,
 ) -> Vec<u8> {
     key_pair
@@ -441,9 +441,11 @@ mod tests {
         assert_eq!(keytag, 34505);
     }
 
+    use bytes::buf::IntoBuf;
     use domain::core::bits::name::Dname;
     use domain::core::iana::rtype::Rtype;
     use domain::core::iana::secalg::SecAlg;
+    use ring::signature::KeyPair;
     use std::str::FromStr;
     #[test]
     fn ecdsa_keypair_test() {
@@ -451,18 +453,73 @@ mod tests {
 
         let rng = rand::SystemRandom::new();
         let keypair = ecdsa_keypair(&rng);
+        let pubkey = bytes::Bytes::from(&keypair.public_key().as_ref()[1..]);
         let message = Vec::from("hello world");
         debug!("keypair     : {:?}", keypair);
+        debug!("pubkey: {:?}", pubkey);
         debug!("message     : {:?}", message);
-        let signature = ecdsa_sign(&rng, keypair, message);
+        let signature = ecdsa_sign(&rng, &keypair, message);
         debug!("signature   : {:?}", signature);
         let owner = Dname::from_str("cloudflare.com").unwrap();
         let ttl = 3600;
         let keyid = 2371;
+        let flag = 256;
+        let protocol = 3;
 
         let offset = 1;
         let i = Serial((Utc::now() - Duration::days(offset)).timestamp() as u32);
         let e = Serial((Utc::now() + Duration::days(offset)).timestamp() as u32);
+        let rrsig = rdata::Rrsig::new(
+            Rtype::Dnskey,
+            SecAlg::EcdsaP256Sha256,
+            owner.clone().label_count() as u8,
+            ttl,
+            e,
+            i,
+            keyid,
+            owner.clone(),
+            bytes::Bytes::from(signature),
+        );
+        debug!("rrsig : {}", rrsig);
+        let dnskey = rdata::Dnskey::new(
+            flag,
+            protocol,
+            SecAlg::EcdsaP256Sha256,
+            bytes::Bytes::from(pubkey),
+        );
+        debug!("dnskey: {}", dnskey);
+
+        let mut rrset = vec![];
+        let rrs = vec![
+          "cloudflare.com. 600 IN DNSKEY 256 3 13 oJMRESz5E4gYzS/q6XDrvU1qMPYIjCWzJaOau8XNEZeqCYKD5ar0IRd8KqXXFJkqmVfRvMGPmM1x8fGAa2XhSA==",
+          "cloudflare.com. 600 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
+        ];
+
+        if !rrs.is_empty() {
+            for s in rrs {
+                let rr = take_one_rr(s).unwrap();
+                rrset.push(rr);
+            }
+        }
+
+        let rrsig = rdata::Rrsig::new(
+            Rtype::Dnskey,
+            SecAlg::EcdsaP256Sha256,
+            owner.clone().label_count() as u8,
+            ttl,
+            e,
+            i,
+            keyid,
+            owner.clone(),
+            bytes::Bytes::new(),
+        );
+
+        let mut message = vec![];
+        rrsig.compose(&mut message);
+        let mut sorted_rrset_bytes = prepare_rrset_to_sign(rrset.clone(), rrsig.original_ttl());
+        message.append(&mut sorted_rrset_bytes);
+
+        let sig = ecdsa_sign(&rng, &keypair, message);
         let rrsig = rdata::Rrsig::new(
             Rtype::Dnskey,
             SecAlg::EcdsaP256Sha256,
@@ -472,8 +529,14 @@ mod tests {
             i,
             keyid,
             owner,
-            bytes::Bytes::from(signature),
+            bytes::Bytes::from(sig),
         );
+        for rr in rrset.clone() {
+            debug!("rr: {}", rr);
+        }
+        debug!("dnskey: {}", dnskey);
         debug!("rrsig : {}", rrsig);
+
+        assert!(verify_rrsig(&dnskey, rrset, &rrsig));
     }
 }
