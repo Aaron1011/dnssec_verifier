@@ -6,28 +6,30 @@ use domain::core::bits::name::{DnameBuilder, Label, ToDname};
 use domain::core::bits::rdata::RecordData;
 use domain::core::bits::record::Record;
 use domain::core::bits::serial::Serial;
+use domain::core::iana::class::Class;
 use domain::core::rdata;
 use log::debug;
 use ring::{rand, signature};
 
 // currently on support algorith 8 and 13
 // RSA is restricted to >2048 bit because of ring
-// TODO: Add inception and expiry check
 pub fn verify_rrsig<N, D>(
     pubkey: &rdata::Dnskey,
     rrs: Vec<Record<N, D>>,
     rrsig: &rdata::Rrsig,
+    rrsig_owner: &N,
 ) -> bool
 where
-    N: ToDname + Clone,
+    N: ToDname + Clone + PartialEq + std::fmt::Display,
     D: RecordData + Clone,
 {
     let rrsig_algo = rrsig.algorithm();
     let inception = rrsig.inception();
     let expiration = rrsig.expiration();
+    let type_covered = rrsig.type_covered();
 
     let rrsig_rdata_nosig = rdata::Rrsig::new(
-        rrsig.type_covered(),
+        type_covered,
         rrsig_algo,
         rrsig.labels(),
         rrsig.original_ttl(),
@@ -42,6 +44,30 @@ where
     // to now
     if !rrsig_datetime_is_valid(inception, expiration) {
         return false;
+    }
+
+    for rr in &rrs {
+        // we don't support any other types that IN
+        if rr.class() != Class::In {
+            debug!("unsupported class {}", rr.class());
+            return false;
+        }
+
+        // Verify that the owner in RRSIG and RRSet are same
+        if rr.owner().to_name() != rrsig_owner {
+            debug!(
+                "owner mismatch rrsig({}) vs rr({})",
+                rrsig_owner,
+                rr.owner().to_name()
+            );
+            return false;
+        }
+
+        // Make sure rrsig type covered is same as rr type
+        if type_covered != rr.rtype() {
+            debug!("rrsig doesn't cover type {}", rr.rtype());
+            return false;
+        }
     }
 
     // buf to be signed/verified
@@ -269,12 +295,13 @@ mod tests {
             MasterRecordData::Dnskey(rr) => Some(rr),
             _ => None,
         };
-        let sig: Option<rdata::Rrsig> = match rrsig.into_data() {
+
+        let sig = match rrsig.data() {
             MasterRecordData::Rrsig(rr) => Some(rr),
             _ => None,
         };
 
-        verify_rrsig(&pubkey.unwrap(), rrset, &sig.unwrap())
+        verify_rrsig(&pubkey.unwrap(), rrset, &sig.unwrap(), rrsig.owner())
     }
 
     #[test]
@@ -380,6 +407,47 @@ mod tests {
         assert!(verify_rrsig_helper(
         "cloudflare.com. 600 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
         "cloudflare.com. 600 IN RRSIG DNSKEY 13 2 3600 20190408024840 20190207024840 2371 cloudflare.com. IaVqBxfybMOKi35lu6sa+iizrcTi8T7f/Jhgss1qcrD7FFaQZZAMtBXVQxq2uZXLxubLP+Zt9bCYUxMOxnb/Jw==",
+        vec![
+          "cloudflare.com. 600 IN DNSKEY 256 3 13 oJMRESz5E4gYzS/q6XDrvU1qMPYIjCWzJaOau8XNEZeqCYKD5ar0IRd8KqXXFJkqmVfRvMGPmM1x8fGAa2XhSA==",
+          "cloudflare.com. 600 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
+        ]
+        ));
+    }
+
+    #[test]
+    fn verify_rrsig_ecdsa_multiple_rr_wrong_class() {
+        init_logger();
+
+        assert!(!verify_rrsig_helper(
+        "cloudflare.com. 3600 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
+        "cloudflare.com. 3600 IN RRSIG DNSKEY 13 2 3600 20190408024840 20190207024840 2371 cloudflare.com. IaVqBxfybMOKi35lu6sa+iizrcTi8T7f/Jhgss1qcrD7FFaQZZAMtBXVQxq2uZXLxubLP+Zt9bCYUxMOxnb/Jw==",
+        vec![
+          "cloudflare.com. 3600 CH TXT id.version 2001",
+        ]
+        ));
+    }
+
+    #[test]
+    fn verify_rrsig_ecdsa_multiple_rr_wrong_owner() {
+        init_logger();
+
+        assert!(!verify_rrsig_helper(
+        "cloudflare.com. 600 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
+        "com. 600 IN RRSIG DNSKEY 13 2 3600 20190408024840 20190207024840 2371 cloudflare.com. IaVqBxfybMOKi35lu6sa+iizrcTi8T7f/Jhgss1qcrD7FFaQZZAMtBXVQxq2uZXLxubLP+Zt9bCYUxMOxnb/Jw==",
+        vec![
+          "cloudflare.com. 600 IN DNSKEY 256 3 13 oJMRESz5E4gYzS/q6XDrvU1qMPYIjCWzJaOau8XNEZeqCYKD5ar0IRd8KqXXFJkqmVfRvMGPmM1x8fGAa2XhSA==",
+          "cloudflare.com. 600 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
+        ]
+        ));
+    }
+
+    #[test]
+    fn verify_rrsig_ecdsa_multiple_rr_wrong_type() {
+        init_logger();
+
+        assert!(!verify_rrsig_helper(
+        "cloudflare.com. 600 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
+        "cloudflare.com. 600 IN RRSIG NS 13 2 3600 20190408024840 20190207024840 2371 cloudflare.com. IaVqBxfybMOKi35lu6sa+iizrcTi8T7f/Jhgss1qcrD7FFaQZZAMtBXVQxq2uZXLxubLP+Zt9bCYUxMOxnb/Jw==",
         vec![
           "cloudflare.com. 600 IN DNSKEY 256 3 13 oJMRESz5E4gYzS/q6XDrvU1qMPYIjCWzJaOau8XNEZeqCYKD5ar0IRd8KqXXFJkqmVfRvMGPmM1x8fGAa2XhSA==",
           "cloudflare.com. 600 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
@@ -528,7 +596,7 @@ mod tests {
             e,
             i,
             keyid,
-            owner,
+            owner.clone(),
             bytes::Bytes::from(sig),
         );
         for rr in rrset.clone() {
@@ -537,6 +605,6 @@ mod tests {
         debug!("dnskey: {}", dnskey);
         debug!("rrsig : {}", rrsig);
 
-        assert!(verify_rrsig(&dnskey, rrset, &rrsig));
+        assert!(verify_rrsig(&dnskey, rrset, &rrsig, &owner));
     }
 }
