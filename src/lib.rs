@@ -28,6 +28,7 @@ where
     let expiration = rrsig.expiration();
     let type_covered = rrsig.type_covered();
 
+    // Generate a rrsig with empty signature
     let rrsig_rdata_nosig = rdata::Rrsig::new(
         type_covered,
         rrsig_algo,
@@ -41,19 +42,18 @@ where
     );
 
     // return false if the rrsig inception and expiration is out of bounds
-    // to now
     if !rrsig_datetime_is_valid(inception, expiration) {
         return false;
     }
 
     for rr in &rrs {
-        // we don't support any other types that IN
+        // we only support IN class
         if rr.class() != Class::In {
             debug!("unsupported class {}", rr.class());
             return false;
         }
 
-        // Verify that the owner in RRSIG and RRSet are same
+        // Verify owner in rrsig and rrset matches
         if rr.owner().to_name() != rrsig_owner {
             debug!(
                 "owner mismatch rrsig({}) vs rr({})",
@@ -70,20 +70,20 @@ where
         }
     }
 
-    // buf to be signed/verified
+    // buffer to hold DNS binary message for verification
     let mut message = vec![];
 
-    // Add RRSIG rdata without the signature
+    // Add rrsig rdata without the signature
     rrsig_rdata_nosig.compose(&mut message);
 
-    // rrset
+    // Add canonically sorted rrset to the buffer
     let mut sorted_rrset_bytes = prepare_rrset_to_sign(rrs, rrsig.original_ttl());
     message.append(&mut sorted_rrset_bytes);
 
     let sig = Vec::from_buf(rrsig.signature().clone().into_buf());
 
     // Add 0x4 idenfitifer to the ECDSA pubkey
-    // required for crypto libraries to recognize
+    // required for crypto libraries
     let mut key: Vec<u8>;
     if rrsig_algo == 13 {
         key = vec![0x4];
@@ -130,7 +130,6 @@ where
 
 // prepares dns message from sorted rrset
 // sorting is done as per https://tools.ietf.org/html/rfc4034#section-6.3
-// TODO: Verify the owner is same
 fn prepare_rrset_to_sign<N, D>(rrs: Vec<Record<N, D>>, ttl: u32) -> Vec<u8>
 where
     N: ToDname + Clone,
@@ -227,7 +226,7 @@ pub fn ecdsa_keypair(rng: &rand::SystemRandom) -> ring::signature::EcdsaKeyPair 
     signature::EcdsaKeyPair::from_pkcs8(alg, untrusted::Input::from(pkcs8.as_ref())).unwrap()
 }
 
-// dnskey pubkey doesn't have the leading 0x4 byte
+// remove leading 0x4 from ecdsa pub key for dnskey rdata
 pub fn ecdsa_dnskey_pubkey(keypair: &impl ring::signature::KeyPair) -> Bytes {
     let b = keypair.public_key().as_ref();
     if b.is_empty() || b.len() < 2 {
@@ -257,9 +256,14 @@ pub fn dnskey_keytag(dnskey: &rdata::Dnskey) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Duration;
+    use domain::core::bits::name::Dname;
+    use domain::core::iana::rtype::Rtype;
+    use domain::core::iana::secalg::SecAlg;
     use domain::core::master::entry::MasterRecord;
     use domain::core::master::reader::{Reader, ReaderItem};
     use domain::core::rdata::MasterRecordData;
+    use std::str::FromStr;
 
     fn init_logger() {
         let _ = env_logger::builder().is_test(true).try_init();
@@ -311,6 +315,47 @@ mod tests {
         };
 
         verify_rrsig(&pubkey.unwrap(), rrset, &sig.unwrap(), rrsig.owner())
+    }
+
+    fn new_rrsig(
+        owner: Dname,
+        ttl: u32,
+        dnskey: &rdata::Dnskey,
+        rtype: Rtype,
+        algo: SecAlg,
+    ) -> rdata::Rrsig {
+        let label_cnt = owner.label_count() as u8;
+        let keytag = dnskey_keytag(dnskey);
+        let validity_days = 1;
+
+        let i = Serial((Utc::now() - Duration::days(validity_days)).timestamp() as u32);
+        let e = Serial((Utc::now() + Duration::days(validity_days)).timestamp() as u32);
+
+        rdata::Rrsig::new(
+            rtype,
+            algo,
+            label_cnt,
+            ttl,
+            e,
+            i,
+            keytag,
+            owner,
+            Bytes::new(),
+        )
+    }
+
+    fn new_rrsig_with_signature(rrsig: &rdata::Rrsig, signature: Vec<u8>) -> rdata::Rrsig {
+        rdata::Rrsig::new(
+            rrsig.type_covered(),
+            rrsig.algorithm(),
+            rrsig.labels(),
+            rrsig.original_ttl(),
+            rrsig.expiration(),
+            rrsig.inception(),
+            rrsig.key_tag(),
+            rrsig.signer_name().clone(),
+            Bytes::from(signature),
+        )
     }
 
     #[test]
@@ -478,7 +523,6 @@ mod tests {
         ));
     }
 
-    use chrono::Duration;
     #[test]
     fn rrsig_datetime_good() {
         init_logger();
@@ -516,52 +560,6 @@ mod tests {
         let keytag = dnskey_keytag(&pubkey.unwrap());
         debug!("{}", keytag);
         assert_eq!(keytag, 34505);
-    }
-
-    use domain::core::bits::name::Dname;
-    use domain::core::iana::rtype::Rtype;
-    use domain::core::iana::secalg::SecAlg;
-    use std::str::FromStr;
-
-    fn new_rrsig(
-        owner: Dname,
-        ttl: u32,
-        dnskey: &rdata::Dnskey,
-        rtype: Rtype,
-        algo: SecAlg,
-    ) -> rdata::Rrsig {
-        let label_cnt = owner.label_count() as u8;
-        let keytag = dnskey_keytag(dnskey);
-        let validity_days = 1;
-
-        let i = Serial((Utc::now() - Duration::days(validity_days)).timestamp() as u32);
-        let e = Serial((Utc::now() + Duration::days(validity_days)).timestamp() as u32);
-
-        rdata::Rrsig::new(
-            rtype,
-            algo,
-            label_cnt,
-            ttl,
-            e,
-            i,
-            keytag,
-            owner,
-            Bytes::new(),
-        )
-    }
-
-    fn new_rrsig_with_signature(rrsig: &rdata::Rrsig, signature: Vec<u8>) -> rdata::Rrsig {
-        rdata::Rrsig::new(
-            rrsig.type_covered(),
-            rrsig.algorithm(),
-            rrsig.labels(),
-            rrsig.original_ttl(),
-            rrsig.expiration(),
-            rrsig.inception(),
-            rrsig.key_tag(),
-            rrsig.signer_name().clone(),
-            Bytes::from(signature),
-        )
     }
 
     #[test]
