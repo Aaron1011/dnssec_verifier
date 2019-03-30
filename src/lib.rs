@@ -1,5 +1,5 @@
 use bytes::buf::FromBuf;
-use bytes::IntoBuf;
+use bytes::{Bytes, IntoBuf};
 use chrono::Utc;
 use domain::core::bits::compose::Compose;
 use domain::core::bits::name::{DnameBuilder, Label, ToDname};
@@ -11,7 +11,7 @@ use domain::core::rdata;
 use log::debug;
 use ring::{rand, signature};
 
-// currently on support algorith 8 and 13
+// currently only support algorithm 8 and 13
 // RSA is restricted to >2048 bit because of ring
 pub fn verify_rrsig<N, D>(
     pubkey: &rdata::Dnskey,
@@ -37,7 +37,7 @@ where
         inception,
         rrsig.key_tag(),
         rrsig.signer_name().clone(),
-        bytes::Bytes::new(),
+        Bytes::new(),
     );
 
     // return false if the rrsig inception and expiration is out of bounds
@@ -209,26 +209,35 @@ fn rrsig_datetime_is_valid(inception: Serial, expiration: Serial) -> bool {
     now >= inception && expiration >= now
 }
 
-fn ecdsa_sign(
+pub fn ecdsa_sign(
     rng: &rand::SystemRandom,
-    key_pair: &ring::signature::EcdsaKeyPair,
+    keypair: &ring::signature::EcdsaKeyPair,
     message: Vec<u8>,
 ) -> Vec<u8> {
-    key_pair
+    keypair
         .sign(rng, untrusted::Input::from(&message))
         .unwrap()
         .as_ref()
         .to_owned()
 }
 
-fn ecdsa_keypair(rng: &rand::SystemRandom) -> ring::signature::EcdsaKeyPair {
+pub fn ecdsa_keypair(rng: &rand::SystemRandom) -> ring::signature::EcdsaKeyPair {
     let alg = &signature::ECDSA_P256_SHA256_FIXED_SIGNING;
     let pkcs8 = signature::EcdsaKeyPair::generate_pkcs8(alg, rng).unwrap();
     signature::EcdsaKeyPair::from_pkcs8(alg, untrusted::Input::from(pkcs8.as_ref())).unwrap()
 }
 
+// dnskey pubkey doesn't have the leading 0x4 byte
+pub fn ecdsa_dnskey_pubkey(keypair: &impl ring::signature::KeyPair) -> Bytes {
+    let b = keypair.public_key().as_ref();
+    if b.is_empty() || b.len() < 2 {
+        return Bytes::new();
+    }
+    Bytes::from(&b[1..])
+}
+
 // copied from https://github.com/miekg/dns/blob/master/dnssec.go#L135
-pub fn dnskey_keytag(dnskey: rdata::Dnskey) -> u16 {
+pub fn dnskey_keytag(dnskey: &rdata::Dnskey) -> u16 {
     let mut buf = vec![];
     dnskey.compose(&mut buf);
     let mut keytag: u32 = 0;
@@ -456,7 +465,7 @@ mod tests {
     }
 
     #[test]
-    fn verify_rrsig_ecdsa_multiple_rr_wrong_keyid() {
+    fn verify_rrsig_ecdsa_multiple_rr_wrong_keytag() {
         init_logger();
 
         assert!(verify_rrsig_helper(
@@ -504,105 +513,100 @@ mod tests {
             MasterRecordData::Dnskey(rr) => Some(rr),
             _ => None,
         };
-        let keytag = dnskey_keytag(pubkey.unwrap());
+        let keytag = dnskey_keytag(&pubkey.unwrap());
         debug!("{}", keytag);
         assert_eq!(keytag, 34505);
     }
 
-    use bytes::buf::IntoBuf;
     use domain::core::bits::name::Dname;
     use domain::core::iana::rtype::Rtype;
     use domain::core::iana::secalg::SecAlg;
-    use ring::signature::KeyPair;
     use std::str::FromStr;
+
+    fn new_rrsig(
+        owner: Dname,
+        ttl: u32,
+        dnskey: &rdata::Dnskey,
+        rtype: Rtype,
+        algo: SecAlg,
+    ) -> rdata::Rrsig {
+        let label_cnt = owner.label_count() as u8;
+        let keytag = dnskey_keytag(dnskey);
+        let validity_days = 1;
+
+        let i = Serial((Utc::now() - Duration::days(validity_days)).timestamp() as u32);
+        let e = Serial((Utc::now() + Duration::days(validity_days)).timestamp() as u32);
+
+        rdata::Rrsig::new(
+            rtype,
+            algo,
+            label_cnt,
+            ttl,
+            e,
+            i,
+            keytag,
+            owner,
+            Bytes::new(),
+        )
+    }
+
+    fn new_rrsig_with_signature(rrsig: &rdata::Rrsig, signature: Vec<u8>) -> rdata::Rrsig {
+        rdata::Rrsig::new(
+            rrsig.type_covered(),
+            rrsig.algorithm(),
+            rrsig.labels(),
+            rrsig.original_ttl(),
+            rrsig.expiration(),
+            rrsig.inception(),
+            rrsig.key_tag(),
+            rrsig.signer_name().clone(),
+            Bytes::from(signature),
+        )
+    }
+
     #[test]
     fn ecdsa_keypair_test() {
         init_logger();
 
         let rng = rand::SystemRandom::new();
         let keypair = ecdsa_keypair(&rng);
-        let pubkey = bytes::Bytes::from(&keypair.public_key().as_ref()[1..]);
-        let message = Vec::from("hello world");
-        debug!("keypair     : {:?}", keypair);
-        debug!("pubkey: {:?}", pubkey);
-        debug!("message     : {:?}", message);
-        let signature = ecdsa_sign(&rng, &keypair, message);
-        debug!("signature   : {:?}", signature);
-        let owner = Dname::from_str("cloudflare.com").unwrap();
-        let ttl = 3600;
-        let keyid = 2371;
-        let flag = 256;
-        let protocol = 3;
+        let pubkey = ecdsa_dnskey_pubkey(&keypair);
+        let owner_str = "example.com";
+        let owner = Dname::from_str(owner_str).unwrap();
 
-        let offset = 1;
-        let i = Serial((Utc::now() - Duration::days(offset)).timestamp() as u32);
-        let e = Serial((Utc::now() + Duration::days(offset)).timestamp() as u32);
-        let rrsig = rdata::Rrsig::new(
-            Rtype::Dnskey,
-            SecAlg::EcdsaP256Sha256,
-            owner.clone().label_count() as u8,
-            ttl,
-            e,
-            i,
-            keyid,
-            owner.clone(),
-            bytes::Bytes::from(signature),
-        );
-        debug!("rrsig : {}", rrsig);
+        debug!("keypair: {:?}", keypair);
+
+        let protocol = 3;
+        let flag = 256;
         let dnskey = rdata::Dnskey::new(
             flag,
             protocol,
             SecAlg::EcdsaP256Sha256,
             bytes::Bytes::from(pubkey),
         );
-        debug!("dnskey: {}", dnskey);
+        debug!("dnskey: {}", &dnskey);
 
-        let mut rrset = vec![];
-        let rrs = vec![
-          "cloudflare.com. 600 IN DNSKEY 256 3 13 oJMRESz5E4gYzS/q6XDrvU1qMPYIjCWzJaOau8XNEZeqCYKD5ar0IRd8KqXXFJkqmVfRvMGPmM1x8fGAa2XhSA==",
-          "cloudflare.com. 600 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
-        ];
-
-        if !rrs.is_empty() {
-            for s in rrs {
-                let rr = take_one_rr(s).unwrap();
-                rrset.push(rr);
-            }
+        let rr = Record::new(owner.clone(), Class::In, 300, dnskey.clone());
+        let rrsig_ttl = rr.ttl();
+        let rrset = vec![rr];
+        for rr in &rrset {
+            debug!("rr: {}", &rr);
         }
 
-        let rrsig = rdata::Rrsig::new(
+        let mut message = vec![];
+        let rrsig = new_rrsig(
+            owner.clone(),
+            rrsig_ttl,
+            &dnskey,
             Rtype::Dnskey,
             SecAlg::EcdsaP256Sha256,
-            owner.clone().label_count() as u8,
-            ttl,
-            e,
-            i,
-            keyid,
-            owner.clone(),
-            bytes::Bytes::new(),
         );
-
-        let mut message = vec![];
         rrsig.compose(&mut message);
         let mut sorted_rrset_bytes = prepare_rrset_to_sign(rrset.clone(), rrsig.original_ttl());
         message.append(&mut sorted_rrset_bytes);
 
-        let sig = ecdsa_sign(&rng, &keypair, message);
-        let rrsig = rdata::Rrsig::new(
-            Rtype::Dnskey,
-            SecAlg::EcdsaP256Sha256,
-            owner.label_count() as u8,
-            ttl,
-            e,
-            i,
-            keyid,
-            owner.clone(),
-            bytes::Bytes::from(sig),
-        );
-        for rr in rrset.clone() {
-            debug!("rr: {}", rr);
-        }
-        debug!("dnskey: {}", dnskey);
+        let signature = ecdsa_sign(&rng, &keypair, message);
+        let rrsig = new_rrsig_with_signature(&rrsig, signature);
         debug!("rrsig : {}", rrsig);
 
         assert!(verify_rrsig(&dnskey, rrset, &rrsig, &owner));
