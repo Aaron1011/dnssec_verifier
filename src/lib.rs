@@ -258,6 +258,7 @@ mod tests {
     use super::*;
     use chrono::Duration;
     use domain::core::bits::name::Dname;
+    use domain::core::bits::record::Record;
     use domain::core::iana::rtype::Rtype;
     use domain::core::iana::secalg::SecAlg;
     use domain::core::master::entry::MasterRecord;
@@ -356,6 +357,70 @@ mod tests {
             rrsig.signer_name().clone(),
             Bytes::from(signature),
         )
+    }
+
+    // Helper Ecdsa Signer to generate verifiable RRSIGs
+    struct EcdsaSigner<'a> {
+        pub rng: rand::SystemRandom,
+        pub keypair: ring::signature::EcdsaKeyPair,
+        pub pubkey: Bytes,
+        pub owner_str: &'a str,
+        pub owner: Dname,
+        pub protocol: u8,
+        pub flag: u16,
+        pub dnskey: rdata::Dnskey,
+    }
+
+    impl<'a> EcdsaSigner<'a> {
+        fn new(owner_str: &str) -> EcdsaSigner {
+            let rng = rand::SystemRandom::new();
+            let keypair = ecdsa_keypair(&rng);
+            let pubkey = ecdsa_dnskey_pubkey(&keypair);
+            let protocol = 3;
+            let flag = 256;
+
+            EcdsaSigner {
+                rng,
+                keypair,
+                pubkey: pubkey.clone(),
+                owner_str,
+                owner: Dname::from_str(owner_str).unwrap(),
+                protocol,
+                flag,
+                dnskey: rdata::Dnskey::new(
+                    flag,
+                    protocol,
+                    SecAlg::EcdsaP256Sha256,
+                    bytes::Bytes::from(pubkey),
+                ),
+            }
+        }
+
+        fn sign<N, D>(&self, rrset: &Vec<Record<N, D>>) -> Option<rdata::Rrsig>
+        where
+            N: ToDname + Clone + PartialEq,
+            D: RecordData + Clone,
+        {
+            if rrset.is_empty() {
+                return None;
+            }
+
+            let mut message = vec![];
+            let rrsig_ttl = rrset[0].ttl();
+            let rrsig = new_rrsig(
+                self.owner.clone(),
+                rrsig_ttl,
+                &self.dnskey,
+                rrset[0].rtype(),
+                SecAlg::EcdsaP256Sha256,
+            );
+            rrsig.compose(&mut message);
+            let mut sorted_rrset_bytes = prepare_rrset_to_sign(rrset.clone(), rrsig.original_ttl());
+            message.append(&mut sorted_rrset_bytes);
+
+            let signature = ecdsa_sign(&self.rng, &self.keypair, message);
+            Some(new_rrsig_with_signature(&rrsig, signature))
+        }
     }
 
     #[test]
@@ -566,47 +631,18 @@ mod tests {
     fn ecdsa_keypair_test() {
         init_logger();
 
-        let rng = rand::SystemRandom::new();
-        let keypair = ecdsa_keypair(&rng);
-        let pubkey = ecdsa_dnskey_pubkey(&keypair);
-        let owner_str = "example.com";
-        let owner = Dname::from_str(owner_str).unwrap();
+        let signer = EcdsaSigner::new("example.com");
+        debug!("keypair: {:?}", signer.keypair);
 
-        debug!("keypair: {:?}", keypair);
-
-        let protocol = 3;
-        let flag = 256;
-        let dnskey = rdata::Dnskey::new(
-            flag,
-            protocol,
-            SecAlg::EcdsaP256Sha256,
-            bytes::Bytes::from(pubkey),
-        );
-        debug!("dnskey: {}", &dnskey);
-
-        let rr = Record::new(owner.clone(), Class::In, 300, dnskey.clone());
-        let rrsig_ttl = rr.ttl();
+        let rr = Record::new(signer.owner.clone(), Class::In, 300, signer.dnskey.clone());
         let rrset = vec![rr];
         for rr in &rrset {
             debug!("rr: {}", &rr);
         }
 
-        let mut message = vec![];
-        let rrsig = new_rrsig(
-            owner.clone(),
-            rrsig_ttl,
-            &dnskey,
-            Rtype::Dnskey,
-            SecAlg::EcdsaP256Sha256,
-        );
-        rrsig.compose(&mut message);
-        let mut sorted_rrset_bytes = prepare_rrset_to_sign(rrset.clone(), rrsig.original_ttl());
-        message.append(&mut sorted_rrset_bytes);
-
-        let signature = ecdsa_sign(&rng, &keypair, message);
-        let rrsig = new_rrsig_with_signature(&rrsig, signature);
+        let rrsig = signer.sign(&rrset).unwrap();
         debug!("rrsig : {}", rrsig);
 
-        assert!(verify_rrsig(&dnskey, rrset, &rrsig, &owner));
+        assert!(verify_rrsig(&signer.dnskey, rrset, &rrsig, &signer.owner));
     }
 }
