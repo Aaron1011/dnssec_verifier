@@ -280,7 +280,7 @@ mod tests {
                     ReaderItem::Record(record) => rrs.push(record),
                     _ => debug!("record item not found"),
                 },
-                Err(err) => debug!("{:?}", err),
+                Err(err) => debug!("parse_dnstext err: {:?}", err),
             }
         }
         rrs
@@ -421,17 +421,44 @@ mod tests {
             let signature = ecdsa_sign(&self.rng, &self.keypair, message);
             Some(new_rrsig_with_signature(&rrsig, signature))
         }
+
+        fn record_with_owner(&self, data: &str) -> String {
+            let mut a = String::from(self.owner.to_string());
+            // Append the last label . and a space
+            a.push_str(". ");
+            a.push_str(data);
+            a
+        }
+
+        fn rrset_with_owner(&self, data: Vec<&str>) -> Vec<MasterRecord> {
+            let mut rrset = vec![];
+
+            for s in data {
+                let rr = take_one_rr(&self.record_with_owner(s)).unwrap();
+                rrset.push(rr);
+            }
+            for rr in &rrset {
+                debug!("{}", rr);
+            }
+            rrset
+        }
+
+        fn dnskey_str(&self) -> String {
+            Record::new(self.owner.clone(), Class::In, 300, self.dnskey.clone()).to_string()
+        }
     }
 
     #[test]
     fn verify_rrsig_ecdsa_good_signature() {
         init_logger();
 
-        assert!(verify_rrsig_helper(
-        "cloudflare.com. 2992 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
-        "cloudflare.com. 3600 IN RRSIG CDNSKEY 13 2 3600 20190408024840 20190207024840 2371 cloudflare.com. odj8zT4s/4qlGiU6gozw1cBupGxwWf01E+l9cQKqUegbe+CLeg59tdCmIFbGMBFb2tTmTTw3F9vTwb21hwJDUg==",
-        vec!["cloudflare.com. 3600 IN CDNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ=="]
-        ));
+        let signer = EcdsaSigner::new("example.com");
+        debug!("dnskey : {}", signer.dnskey_str());
+        let rrset = signer.rrset_with_owner(vec![" 3600 IN A 192.0.2.1", " 3600 IN A 192.0.2.2"]);
+        let rrsig = signer.sign(&rrset).unwrap();
+        debug!("rrsig : {}", rrsig);
+
+        assert!(verify_rrsig(&signer.dnskey, rrset, &rrsig, &signer.owner));
     }
 
     #[test]
