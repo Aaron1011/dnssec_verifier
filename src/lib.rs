@@ -421,31 +421,31 @@ mod tests {
             let signature = ecdsa_sign(&self.rng, &self.keypair, message);
             Some(new_rrsig_with_signature(&rrsig, signature))
         }
+    }
 
-        fn record_with_owner(&self, data: &str) -> String {
-            let mut a = String::from(self.owner.to_string());
-            // Append the last label . and a space
-            a.push_str(". ");
-            a.push_str(data);
-            a
+    fn dnskey_str(owner: &Dname, dnskey: &rdata::Dnskey) -> String {
+        Record::new(owner.clone(), Class::In, 300, dnskey.clone()).to_string()
+    }
+
+    fn record_with_owner(owner: &Dname, data: &str) -> String {
+        let mut a = String::from(owner.to_string());
+        // Append the last label . and a space
+        a.push_str(". ");
+        a.push_str(data);
+        a
+    }
+
+    fn rrset_with_owner(owner: &Dname, data: Vec<&str>) -> Vec<MasterRecord> {
+        let mut rrset = vec![];
+
+        for s in data {
+            let rr = take_one_rr(&record_with_owner(owner, s)).unwrap();
+            rrset.push(rr);
         }
-
-        fn rrset_with_owner(&self, data: Vec<&str>) -> Vec<MasterRecord> {
-            let mut rrset = vec![];
-
-            for s in data {
-                let rr = take_one_rr(&self.record_with_owner(s)).unwrap();
-                rrset.push(rr);
-            }
-            for rr in &rrset {
-                debug!("{}", rr);
-            }
-            rrset
+        for rr in &rrset {
+            debug!("{}", rr);
         }
-
-        fn dnskey_str(&self) -> String {
-            Record::new(self.owner.clone(), Class::In, 300, self.dnskey.clone()).to_string()
-        }
+        rrset
     }
 
     #[test]
@@ -453,8 +453,11 @@ mod tests {
         init_logger();
 
         let signer = EcdsaSigner::new("example.com");
-        debug!("dnskey : {}", signer.dnskey_str());
-        let rrset = signer.rrset_with_owner(vec![" 3600 IN A 192.0.2.1", " 3600 IN A 192.0.2.2"]);
+        debug!("dnskey : {}", dnskey_str(&signer.owner, &signer.dnskey));
+        let rrset = rrset_with_owner(
+            &signer.owner,
+            vec![" 3600 IN A 192.0.2.1", " 3600 IN A 192.0.2.2"],
+        );
         let rrsig = signer.sign(&rrset).unwrap();
         debug!("rrsig : {}", rrsig);
 
