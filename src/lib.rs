@@ -1,5 +1,5 @@
 use bytes::buf::FromBuf;
-use bytes::{Bytes, IntoBuf};
+use bytes::{BufMut, Bytes, BytesMut, IntoBuf};
 use chrono::Utc;
 use domain::core::bits::compose::Compose;
 use domain::core::bits::name::{DnameBuilder, Label, ToDname};
@@ -220,10 +220,57 @@ pub fn ecdsa_sign(
         .to_owned()
 }
 
+pub fn rsa_sign(
+    rng: &rand::SystemRandom,
+    keypair: &ring::signature::RsaKeyPair,
+    message: Vec<u8>,
+) -> Vec<u8> {
+    let mut sig = vec![0; keypair.public_modulus_len()];
+    keypair
+        .sign(&signature::RSA_PKCS1_SHA256, rng, &message, &mut sig)
+        .unwrap();
+    sig
+}
+
 pub fn ecdsa_keypair(rng: &rand::SystemRandom) -> ring::signature::EcdsaKeyPair {
     let alg = &signature::ECDSA_P256_SHA256_FIXED_SIGNING;
     let pkcs8 = signature::EcdsaKeyPair::generate_pkcs8(alg, rng).unwrap();
     signature::EcdsaKeyPair::from_pkcs8(alg, untrusted::Input::from(pkcs8.as_ref())).unwrap()
+}
+
+pub fn rsa_keypair() -> ring::signature::RsaKeyPair {
+    let b = base64::decode(
+        &"
+MIIEpAIBAAKCAQEA4W8gkDyQZCWoFSAxiUmyrIA7H9tpd1EHkGxBDrpIOf+OT57s
+AA5ROIZwwaPn5pqurU69tVbIglt/BKk1gwlFz3qGmGb1feaiqAhTGvan3yT2j+Qi
+WxQz0VNxuZPhiKEQCk+QrCvZMV29q4gROVnIYC2T3+XQptu3+zzkfGTqCy5KkizW
+IiZnbNszHUisXHF4+rB4coiWlIpd0MB9M3maCHqUpXqDmMRqr7V0foZXwTvkVfND
+SZjWCs3LvINHIipS4+7ickj+VarMyDLIOYJhLakZ+7SHp/ZPLF/QB2jW8o22C8o5
+2nHj1g7k6i5jr0LvmxXRayv4YSy8BfUKuuzTAQIDAQABAoIBAG8vQu1AoapzFCJP
+PX9LtO71U7PToIGzmjp12eRspeDNFSBZ7mXcqdxqGkS3FVIcKljZxCEjC0OX4t6m
+ofjd4uuAr8+MwDl3PfQIHwzmaEdbUKwJRZSMMz5jnGx97jdX0LR1J5JzEe0SIdDv
+DCewC268K/m6vBz/sw8bqklb8D7QiZofje+u3ZO2jlQhtPSJdOdR5jvf1AMG0WXy
+hB0eGiJOC0VgybWELLTjPbC+aAuaf05kzDPa7SiILFk0P2bxMFA8lqadF8bLrlR5
+NrrpaKNbDpqeMwqlImnLKLZQHPXpwyy1QiXEivihCWjhlkheTH4mkqLDeOToo1Ec
+UsJrKv0CgYEA/zEwzf/dRfoZ1K1jOPbRwWGUQNPSUG65LgElbqCIx9ddqxovl62W
+s70BwaPSGlTi8wfiJwVGPERhb9UrpDILcmgBlH/qMCkCnhsvb/Xb3GnQS39u7fad
+x35WDhsMyd1KRwOp0aPt0euWUCyOBqdl2rEov1C4cMWH5SHMYXbi/wMCgYEA4iXS
+B/9WBb9LMYJTc6YCvPg7TpkMdgKAwVYAdwC6EVXSLI9vM+C9qO/d8pRHNMhJfcSd
+CYnoQgp+WK1e5vxQFQnIrNPTH8iZaRG2WCkJuIxYdl6UxZ5eM0a/hND5MNeHXQSP
+I3d2ezIjuaghpCUv3PyX1jWNiLKr1L806iAK1KsCgYAbwGa1UEjo7jzW4xAyRq0i
+4ZC0yBRMCO58cUV31V9qlCIslElurkMAQuKpAz66/FY95bKTWcB8l1cdSUpYrdSO
+2X6qfoqiOCN/vCcZftwtCRjMzQvsNvCLnFKRcCGg5j7IoD5cfP5E4ODU0TOUx6mM
+8c0jmQylvuV7ZoSKaNpgrwKBgQDC6J3QzryxT2HbVdve/OG3RKq43yfiPd4Cw8C6
+0CGN902hoi3RpI1SIQpFnI6Sa10LzH0cT4OiB7FFdIcqxaOvvjL64cZAyn+OEvn5
+mcULDcrgmjvW5tuBjiRasFFVSy0bemZzxu6S12/6/3GfK33JFNs4gAdwHa4DOpi8
+gMlU6QKBgQChi/b3efERN1n4BpKZOXC+Fh53aAcA59aH3SAFFvJn9+zIEhfk327q
+aYrWpkyQFWwA2e4M5WEw7xuEbWXtvNg39YlDxVRlYY6PK7wrSGw7FhDaEMfjkPA0
+PvJwvKhYPuBDSMSrYa28c6Q9F+SjUjKvm81lyIo+k86hLBfjCxNgVA==
+"
+        .replace('\n', ""),
+    )
+    .unwrap();
+    signature::RsaKeyPair::from_der(untrusted::Input::from(&b)).unwrap()
 }
 
 // remove leading 0x4 from ecdsa pub key for dnskey rdata
@@ -233,6 +280,32 @@ pub fn ecdsa_dnskey_pubkey(keypair: &impl ring::signature::KeyPair) -> Bytes {
         return Bytes::new();
     }
     Bytes::from(&b[1..])
+}
+
+pub fn rsa_pubkey_from_keypair(keypair: &ring::signature::RsaKeyPair) -> Bytes {
+    let pubkey = signature::KeyPair::public_key(keypair);
+    let modulus = pubkey
+        .modulus()
+        .big_endian_without_leading_zero()
+        .as_slice_less_safe();
+    let modulus_len = keypair.public_modulus_len();
+    let exponent = pubkey
+        .exponent()
+        .big_endian_without_leading_zero()
+        .as_slice_less_safe();
+    let exponent_len = exponent.len() as u8;
+
+    debug!("modulus: {:?}", modulus);
+    debug!("exponent: {:?}", exponent);
+    debug!("modulus len: {:#?}", modulus_len);
+    debug!("exponent len: {:#?}", exponent_len);
+
+    let mut buf = BytesMut::with_capacity(1 + exponent.len() + modulus.len());
+    // Assuming the exponent len is less than 256
+    buf.put(exponent_len);
+    buf.put(exponent);
+    buf.put(modulus);
+    buf.freeze()
 }
 
 // copied from https://github.com/miekg/dns/blob/master/dnssec.go#L135
@@ -359,6 +432,31 @@ mod tests {
         )
     }
 
+    fn dnskey_str(owner: &Dname, dnskey: &rdata::Dnskey) -> String {
+        Record::new(owner.clone(), Class::In, 300, dnskey.clone()).to_string()
+    }
+
+    fn record_with_owner(owner: &Dname, data: &str) -> String {
+        let mut a = String::from(owner.to_string());
+        // Append the last label . and a space
+        a.push_str(". ");
+        a.push_str(data);
+        a
+    }
+
+    fn rrset_with_owner(owner: &Dname, data: Vec<&str>) -> Vec<MasterRecord> {
+        let mut rrset = vec![];
+
+        for s in data {
+            let rr = take_one_rr(&record_with_owner(owner, s)).unwrap();
+            rrset.push(rr);
+        }
+        for rr in &rrset {
+            debug!("{}", rr);
+        }
+        rrset
+    }
+
     // Helper Ecdsa Signer to generate verifiable RRSIGs
     struct EcdsaSigner<'a> {
         pub rng: rand::SystemRandom,
@@ -423,29 +521,68 @@ mod tests {
         }
     }
 
-    fn dnskey_str(owner: &Dname, dnskey: &rdata::Dnskey) -> String {
-        Record::new(owner.clone(), Class::In, 300, dnskey.clone()).to_string()
+    // Helper RSA Signer to generate verifiable RRSIGs
+    struct RsaSigner<'a> {
+        pub rng: rand::SystemRandom,
+        pub keypair: ring::signature::RsaKeyPair,
+        pub pubkey: Bytes,
+        pub owner_str: &'a str,
+        pub owner: Dname,
+        pub protocol: u8,
+        pub flag: u16,
+        pub dnskey: rdata::Dnskey,
     }
 
-    fn record_with_owner(owner: &Dname, data: &str) -> String {
-        let mut a = String::from(owner.to_string());
-        // Append the last label . and a space
-        a.push_str(". ");
-        a.push_str(data);
-        a
-    }
+    impl<'a> RsaSigner<'a> {
+        fn new(owner_str: &str) -> RsaSigner {
+            let rng = rand::SystemRandom::new();
+            let keypair = rsa_keypair();
+            let pubkey = rsa_pubkey_from_keypair(&keypair);
+            let protocol = 3;
+            let flag = 256;
 
-    fn rrset_with_owner(owner: &Dname, data: Vec<&str>) -> Vec<MasterRecord> {
-        let mut rrset = vec![];
+            RsaSigner {
+                rng,
+                keypair,
+                pubkey: pubkey.clone(),
+                owner_str,
+                owner: Dname::from_str(owner_str).unwrap(),
+                protocol,
+                flag,
+                dnskey: rdata::Dnskey::new(
+                    flag,
+                    protocol,
+                    SecAlg::RsaSha256,
+                    bytes::Bytes::from(pubkey),
+                ),
+            }
+        }
 
-        for s in data {
-            let rr = take_one_rr(&record_with_owner(owner, s)).unwrap();
-            rrset.push(rr);
+        fn sign<N, D>(&self, rrset: &Vec<Record<N, D>>) -> Option<rdata::Rrsig>
+        where
+            N: ToDname + Clone + PartialEq,
+            D: RecordData + Clone,
+        {
+            if rrset.is_empty() {
+                return None;
+            }
+
+            let mut message = vec![];
+            let rrsig_ttl = rrset[0].ttl();
+            let rrsig = new_rrsig(
+                self.owner.clone(),
+                rrsig_ttl,
+                &self.dnskey,
+                rrset[0].rtype(),
+                SecAlg::RsaSha256,
+            );
+            rrsig.compose(&mut message);
+            let mut sorted_rrset_bytes = prepare_rrset_to_sign(rrset.clone(), rrsig.original_ttl());
+            message.append(&mut sorted_rrset_bytes);
+
+            let signature = rsa_sign(&self.rng, &self.keypair, message);
+            Some(new_rrsig_with_signature(&rrsig, signature))
         }
-        for rr in &rrset {
-            debug!("{}", rr);
-        }
-        rrset
     }
 
     #[test]
@@ -479,11 +616,16 @@ mod tests {
     fn verify_rrsig_rsa_good_signature() {
         init_logger();
 
-        assert!(verify_rrsig_helper(
-        ". 172800 IN DNSKEY 256 3 8 AwEAAcH+axCdUOsTc9o+jmyVq5rsGTh1EcatSumPqEfsPBT+whyj0/UhD7cWeixV9Wqzj/cnqs8iWELqhdzGX41ZtaNQUfWNfOriASnWmX2D9m/EunplHu8nMSlDnDcT7+llE9tjk5HI1Sr7d9N16ZTIrbVALf65VB2ABbBG39dyAb7tz21PICJbSp2cd77UF7NFqEVkqohl/LkDw+7Apalmp0qAQT1Mgwi2cVxZMKUiciA6EqS+KNajf0A6olO2oEhZnGGY6b1LTg34/YfHdiIIZQqAfqbieruCGHRiSscC2ZE7iNreL/76f4JyIEUNkt6bQA29JsegxorLzQkpF7NKqZc=",
-        ". 86400 IN RRSIG SOA 8 0 86400 20190402170000 20190320160000 16749 . tmdkfxbiKWgi0oHGp2ti1fvOmQNIlxZ/c65A0AmdiaHaH9MonVOLkpNYiz1JRXKNcXmdtLto1IikVwIyGCPLIrzr77yMawrGAhb7KisTbSGGx7czlyv9Qdmi4wTdO/6fq73DTGHKVYGILM15kFIdAEEHVP8OISXsBJwQOhvXlHIeOtC4oeR63RBNfOSS1V9hLs17K9OjK0EFxerCnOEoZHeFIhzqvWRXCZ4YVOEfpSOvPWRV+D/RfDTBPaf1U5qFu9H5WcUzyoUJakukvg1+WTUZ0LmdkFplOrel+yAd++QGbtguX8LftgY7qlDMuY7FvKqb3+TsAAvTXRot4tE1fw==",
-        vec![". 86400   IN      SOA     a.root-servers.net. nstld.verisign-grs.com. 2019032001 1800 900 604800 86400"],
-        ));
+        let signer = RsaSigner::new("example.com");
+        debug!("dnskey : {}", dnskey_str(&signer.owner, &signer.dnskey));
+        let rrset = rrset_with_owner(
+            &signer.owner,
+            vec![" 3600 IN A 192.0.2.1", " 3600 IN A 192.0.2.2"],
+        );
+        let rrsig = signer.sign(&rrset).unwrap();
+        debug!("rrsig : {}", rrsig);
+
+        assert!(verify_rrsig(&signer.dnskey, rrset, &rrsig, &signer.owner));
     }
 
     #[test]
