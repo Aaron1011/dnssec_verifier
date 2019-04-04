@@ -457,6 +457,115 @@ mod tests {
         rrset
     }
 
+    // Mock Signer to generate verifiable RRSIGs
+    struct Signer<'a> {
+        pub secalg: SecAlg,
+        pub rng: rand::SystemRandom,
+        pub ecdsa_keypair: Option<signature::EcdsaKeyPair>,
+        pub rsa_keypair: Option<signature::RsaKeyPair>,
+        pub pubkey: Bytes,
+        pub owner_str: &'a str,
+        pub owner: Dname,
+        pub protocol: u8,
+        pub flag: u16,
+        pub dnskey: rdata::Dnskey,
+    }
+
+    impl<'a> Signer<'a> {
+        fn new(owner_str: &str, secalg: SecAlg) -> Option<Signer> {
+            let rng = rand::SystemRandom::new();
+            let protocol = 3;
+            let flag = 256;
+
+            match secalg {
+                SecAlg::EcdsaP256Sha256 => {
+                    let keypair = ecdsa_keypair(&rng);
+                    let pubkey = ecdsa_dnskey_pubkey(&keypair);
+                    Some(Signer {
+                        secalg,
+                        rng,
+                        ecdsa_keypair: Some(keypair),
+                        rsa_keypair: None,
+                        pubkey: pubkey.clone(),
+                        owner_str,
+                        owner: Dname::from_str(owner_str).unwrap(),
+                        protocol,
+                        flag,
+                        dnskey: rdata::Dnskey::new(
+                            flag,
+                            protocol,
+                            SecAlg::EcdsaP256Sha256,
+                            bytes::Bytes::from(pubkey),
+                        ),
+                    })
+                }
+
+                SecAlg::RsaSha256 => {
+                    let keypair = rsa_keypair();
+                    let pubkey = rsa_pubkey_from_keypair(&keypair);
+                    return Some(Signer {
+                        secalg,
+                        rng,
+                        ecdsa_keypair: None,
+                        rsa_keypair: Some(keypair),
+                        pubkey: pubkey.clone(),
+                        owner_str,
+                        owner: Dname::from_str(owner_str).unwrap(),
+                        protocol,
+                        flag,
+                        dnskey: rdata::Dnskey::new(
+                            flag,
+                            protocol,
+                            SecAlg::RsaSha256,
+                            bytes::Bytes::from(pubkey),
+                        ),
+                    });
+                }
+                _ => return None,
+            }
+        }
+
+        fn sign<N, D>(&self, rrset: &Vec<Record<N, D>>) -> Option<rdata::Rrsig>
+        where
+            N: ToDname + Clone + PartialEq,
+            D: RecordData + Clone,
+        {
+            if rrset.is_empty() {
+                return None;
+            }
+
+            let mut message = vec![];
+            let rrsig_ttl = rrset[0].ttl();
+            let rrsig = new_rrsig(
+                self.owner.clone(),
+                rrsig_ttl,
+                &self.dnskey,
+                rrset[0].rtype(),
+                self.secalg,
+            );
+            rrsig.compose(&mut message);
+            let mut sorted_rrset_bytes = prepare_rrset_to_sign(rrset.clone(), rrsig.original_ttl());
+            message.append(&mut sorted_rrset_bytes);
+
+            let mut signature: Vec<u8> = vec![0];
+            match self.secalg {
+                SecAlg::EcdsaP256Sha256 => {
+                    if let Some(keypair) = &self.ecdsa_keypair {
+                        signature = ecdsa_sign(&self.rng, &keypair, message);
+                    }
+                }
+                SecAlg::RsaSha256 => {
+                    if let Some(keypair) = &self.rsa_keypair {
+                        signature = rsa_sign(&self.rng, &keypair, message);
+                    }
+                }
+                _ => return None,
+            }
+            Some(new_rrsig_with_signature(&rrsig, signature))
+        }
+    }
+
+    /*
     // Helper Ecdsa Signer to generate verifiable RRSIGs
     struct EcdsaSigner<'a> {
         pub rng: rand::SystemRandom,
@@ -584,12 +693,13 @@ mod tests {
             Some(new_rrsig_with_signature(&rrsig, signature))
         }
     }
+    */
 
     #[test]
     fn verify_rrsig_ecdsa_good_signature() {
         init_logger();
 
-        let signer = EcdsaSigner::new("example.com");
+        let signer = Signer::new("example.com", SecAlg::EcdsaP256Sha256).unwrap();
         debug!("dnskey : {}", dnskey_str(&signer.owner, &signer.dnskey));
         let rrset = rrset_with_owner(
             &signer.owner,
@@ -616,7 +726,7 @@ mod tests {
     fn verify_rrsig_rsa_good_signature() {
         init_logger();
 
-        let signer = RsaSigner::new("example.com");
+        let signer = Signer::new("example.com", SecAlg::RsaSha256).unwrap();
         debug!("dnskey : {}", dnskey_str(&signer.owner, &signer.dnskey));
         let rrset = rrset_with_owner(
             &signer.owner,
@@ -803,9 +913,7 @@ mod tests {
     fn ecdsa_keypair_test() {
         init_logger();
 
-        let signer = EcdsaSigner::new("example.com");
-        debug!("keypair: {:?}", signer.keypair);
-
+        let signer = Signer::new("example.com", SecAlg::EcdsaP256Sha256).unwrap();
         let rr = Record::new(signer.owner.clone(), Class::In, 300, signer.dnskey.clone());
         let rrset = vec![rr];
         for rr in &rrset {
