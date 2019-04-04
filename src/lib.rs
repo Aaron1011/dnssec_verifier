@@ -128,6 +128,19 @@ where
     }
 }
 
+fn canonical_owner<N>(owner: &N) -> Dname
+where
+    N: ToDname + Clone,
+{
+    let mut dname_builder = DnameBuilder::new();
+    for label in owner.to_name().iter() {
+        let m: Vec<u8> = label.iter().map(u8::to_ascii_lowercase).collect();
+        let label = Label::from_slice(&m).unwrap();
+        dname_builder.append_label(label).unwrap();
+    }
+    dname_builder.into_dname().unwrap()
+}
+
 // prepares dns message from sorted rrset
 // sorting is done as per https://tools.ietf.org/html/rfc4034#section-6.3
 fn prepare_rrset_to_sign<N, D>(rrs: Vec<Record<N, D>>, ttl: u32) -> Vec<u8>
@@ -140,17 +153,9 @@ where
         let mut b = vec![];
         let rr = rr.clone();
 
-        // build a new Dname with lowercased labels
-        let mut dname_builder = DnameBuilder::new();
-        for l in rr.owner().to_name().iter() {
-            let m: Vec<u8> = l.iter().map(u8::to_ascii_lowercase).collect();
-            let l = Label::from_slice(&m).unwrap();
-            dname_builder.append_label(l).unwrap();
-        }
-
         // build a new record with lowercased labels
         let mut rr = Record::new(
-            dname_builder.into_dname().unwrap(),
+            canonical_owner(&rr.owner()),
             rr.class(),
             ttl,
             rr.into_data(),
@@ -537,7 +542,7 @@ mod tests {
             let mut message = vec![];
             let rrsig_ttl = rrset[0].ttl();
             let rrsig = new_rrsig(
-                self.owner.clone(),
+                canonical_owner(&self.owner),
                 rrsig_ttl,
                 &self.dnskey,
                 rrset[0].rtype(),
