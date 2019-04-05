@@ -6,6 +6,7 @@ use domain::core::bits::name::{DnameBuilder, Label, ToDname};
 use domain::core::bits::rdata::RecordData;
 use domain::core::bits::record::Record;
 use domain::core::bits::serial::Serial;
+use domain::core::bits::Dname;
 use domain::core::iana::class::Class;
 use domain::core::rdata;
 use log::debug;
@@ -471,9 +472,6 @@ mod tests {
             let rr = take_one_rr(&record_with_owner(owner, s)).unwrap();
             rrset.push(rr);
         }
-        for rr in &rrset {
-            debug!("{}", rr);
-        }
         rrset
     }
 
@@ -585,309 +583,163 @@ mod tests {
         }
     }
 
-    /*
-    // Helper Ecdsa Signer to generate verifiable RRSIGs
-    struct EcdsaSigner<'a> {
-        pub rng: rand::SystemRandom,
-        pub keypair: ring::signature::EcdsaKeyPair,
-        pub pubkey: Bytes,
-        pub owner_str: &'a str,
-        pub owner: Dname,
-        pub protocol: u8,
-        pub flag: u16,
-        pub dnskey: rdata::Dnskey,
+    // corrupt rrsig signature
+    fn corrupt_signature(rrsig: &rdata::Rrsig) -> rdata::Rrsig {
+        let mut c = rrsig.signature().to_vec();
+        assert!(c.len() > 0);
+        c[0] = c[0] + 1;
+        new_rrsig_with_signature(rrsig, c)
     }
 
-    impl<'a> EcdsaSigner<'a> {
-        fn new(owner_str: &str) -> EcdsaSigner {
-            let rng = rand::SystemRandom::new();
-            let keypair = ecdsa_keypair(&rng);
-            let pubkey = ecdsa_dnskey_pubkey(&keypair);
-            let protocol = 3;
-            let flag = 256;
-
-            EcdsaSigner {
-                rng,
-                keypair,
-                pubkey: pubkey.clone(),
-                owner_str,
-                owner: Dname::from_str(owner_str).unwrap(),
-                protocol,
-                flag,
-                dnskey: rdata::Dnskey::new(
-                    flag,
-                    protocol,
-                    SecAlg::EcdsaP256Sha256,
-                    bytes::Bytes::from(pubkey),
-                ),
-            }
-        }
-
-        fn sign<N, D>(&self, rrset: &Vec<Record<N, D>>) -> Option<rdata::Rrsig>
-        where
-            N: ToDname + Clone + PartialEq,
-            D: RecordData + Clone,
-        {
-            if rrset.is_empty() {
-                return None;
-            }
-
-            let mut message = vec![];
-            let rrsig_ttl = rrset[0].ttl();
-            let rrsig = new_rrsig(
-                self.owner.clone(),
-                rrsig_ttl,
-                &self.dnskey,
-                rrset[0].rtype(),
-                SecAlg::EcdsaP256Sha256,
-            );
-            rrsig.compose(&mut message);
-            let mut sorted_rrset_bytes = prepare_rrset_to_sign(rrset.clone(), rrsig.original_ttl());
-            message.append(&mut sorted_rrset_bytes);
-
-            let signature = ecdsa_sign(&self.rng, &self.keypair, message);
-            Some(new_rrsig_with_signature(&rrsig, signature))
-        }
-    }
-
-    // Helper RSA Signer to generate verifiable RRSIGs
-    struct RsaSigner<'a> {
-        pub rng: rand::SystemRandom,
-        pub keypair: ring::signature::RsaKeyPair,
-        pub pubkey: Bytes,
-        pub owner_str: &'a str,
-        pub owner: Dname,
-        pub protocol: u8,
-        pub flag: u16,
-        pub dnskey: rdata::Dnskey,
-    }
-
-    impl<'a> RsaSigner<'a> {
-        fn new(owner_str: &str) -> RsaSigner {
-            let rng = rand::SystemRandom::new();
-            let keypair = rsa_keypair();
-            let pubkey = rsa_pubkey_from_keypair(&keypair);
-            let protocol = 3;
-            let flag = 256;
-
-            RsaSigner {
-                rng,
-                keypair,
-                pubkey: pubkey.clone(),
-                owner_str,
-                owner: Dname::from_str(owner_str).unwrap(),
-                protocol,
-                flag,
-                dnskey: rdata::Dnskey::new(
-                    flag,
-                    protocol,
-                    SecAlg::RsaSha256,
-                    bytes::Bytes::from(pubkey),
-                ),
-            }
-        }
-
-        fn sign<N, D>(&self, rrset: &Vec<Record<N, D>>) -> Option<rdata::Rrsig>
-        where
-            N: ToDname + Clone + PartialEq,
-            D: RecordData + Clone,
-        {
-            if rrset.is_empty() {
-                return None;
-            }
-
-            let mut message = vec![];
-            let rrsig_ttl = rrset[0].ttl();
-            let rrsig = new_rrsig(
-                self.owner.clone(),
-                rrsig_ttl,
-                &self.dnskey,
-                rrset[0].rtype(),
-                SecAlg::RsaSha256,
-            );
-            rrsig.compose(&mut message);
-            let mut sorted_rrset_bytes = prepare_rrset_to_sign(rrset.clone(), rrsig.original_ttl());
-            message.append(&mut sorted_rrset_bytes);
-
-            let signature = rsa_sign(&self.rng, &self.keypair, message);
-            Some(new_rrsig_with_signature(&rrsig, signature))
-        }
-    }
-    */
-
-    #[test]
-    fn verify_rrsig_ecdsa_good_signature() {
-        init_logger();
-
-        let signer = Signer::new("example.com", SecAlg::EcdsaP256Sha256).unwrap();
+    // helper to generate test data
+    fn mock_signed_rrs(secalg: SecAlg) -> (Signer<'static>, Vec<MasterRecord>, rdata::Rrsig) {
+        let signer = Signer::new("example.com", secalg).unwrap();
         debug!("dnskey : {}", dnskey_str(&signer.owner, &signer.dnskey));
         let rrset = rrset_with_owner(
             &signer.owner,
             vec![" 3600 IN A 192.0.2.1", " 3600 IN A 192.0.2.2"],
         );
+        for rr in &rrset {
+            debug!("{}", rr);
+        }
         let rrsig = signer.sign(&rrset).unwrap();
         debug!("rrsig : {}", rrsig);
 
+        (signer, rrset, rrsig)
+    }
+
+    fn mock_signed_rrs_from_rrset(
+        owner: &'static str,
+        secalg: SecAlg,
+        rrset: Vec<&str>,
+    ) -> (Signer<'static>, Vec<MasterRecord>, rdata::Rrsig) {
+        let signer = Signer::new(owner, secalg).unwrap();
+        debug!("dnskey : {}", dnskey_str(&signer.owner, &signer.dnskey));
+        let rrset = rrset_with_owner(&signer.owner, rrset);
+        for rr in &rrset {
+            debug!("{}", rr);
+        }
+        let rrsig = signer.sign(&rrset).unwrap();
+        debug!("rrsig : {}", rrsig);
+
+        (signer, rrset, rrsig)
+    }
+
+    #[test]
+    fn verify_rrsig_ecdsa_good_signature() {
+        init_logger();
+        let (signer, rrset, rrsig) = mock_signed_rrs(SecAlg::EcdsaP256Sha256);
         assert!(verify_rrsig(&signer.dnskey, rrset, &rrsig, &signer.owner));
     }
 
     #[test]
     fn verify_rrsig_ecdsa_bad_signature() {
         init_logger();
-
-        assert!(!verify_rrsig_helper(
-        "cloudflare.com. 2992 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
-        "cloudflare.com. 3600 IN RRSIG CDNSKEY 13 2 3600 20190408024840 20190207024840 2371 cloudflare.com. bad+signatur++++gozw1cBupGxwWf01E+l9cQKqUegbe+CLeg59tdCmIFbGMBFb2tTmTTw3F9vTwb21hwJDUg==",
-        vec!["cloudflare.com. 3600 IN CDNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ=="],
-        ));
+        let (signer, rrset, rrsig) = mock_signed_rrs(SecAlg::EcdsaP256Sha256);
+        // corrupt rrsig signature
+        let rrsig = corrupt_signature(&rrsig);
+        debug!("corrupt rrsig : {}", rrsig);
+        assert!(!verify_rrsig(&signer.dnskey, rrset, &rrsig, &signer.owner));
     }
 
     #[test]
     fn verify_rrsig_rsa_good_signature() {
         init_logger();
-
-        let signer = Signer::new("example.com", SecAlg::RsaSha256).unwrap();
-        debug!("dnskey : {}", dnskey_str(&signer.owner, &signer.dnskey));
-        let rrset = rrset_with_owner(
-            &signer.owner,
-            vec![" 3600 IN A 192.0.2.1", " 3600 IN A 192.0.2.2"],
-        );
-        let rrsig = signer.sign(&rrset).unwrap();
-        debug!("rrsig : {}", rrsig);
-
+        let (signer, rrset, rrsig) = mock_signed_rrs(SecAlg::RsaSha256);
         assert!(verify_rrsig(&signer.dnskey, rrset, &rrsig, &signer.owner));
     }
 
     #[test]
     fn verify_rrsig_rsa_bad_signature() {
         init_logger();
-
-        assert!(!verify_rrsig_helper(
-        ". 172800 IN DNSKEY 256 3 8 +++BadSignature+++o+jmyVq5rsGTh1EcatSumPqEfsPBT+whyj0/UhD7cWeixV9Wqzj/cnqs8iWELqhdzGX41ZtaNQUfWNfOriASnWmX2D9m/EunplHu8nMSlDnDcT7+llE9tjk5HI1Sr7d9N16ZTIrbVALf65VB2ABbBG39dyAb7tz21PICJbSp2cd77UF7NFqEVkqohl/LkDw+7Apalmp0qAQT1Mgwi2cVxZMKUiciA6EqS+KNajf0A6olO2oEhZnGGY6b1LTg34/YfHdiIIZQqAfqbieruCGHRiSscC2ZE7iNreL/76f4JyIEUNkt6bQA29JsegxorLzQkpF7NKqZc=",
-        ". 86400 IN RRSIG SOA 8 0 86400 20190402170000 20190320160000 16749 . tmdkfxbiKWgi0oHGp2ti1fvOmQNIlxZ/c65A0AmdiaHaH9MonVOLkpNYiz1JRXKNcXmdtLto1IikVwIyGCPLIrzr77yMawrGAhb7KisTbSGGx7czlyv9Qdmi4wTdO/6fq73DTGHKVYGILM15kFIdAEEHVP8OISXsBJwQOhvXlHIeOtC4oeR63RBNfOSS1V9hLs17K9OjK0EFxerCnOEoZHeFIhzqvWRXCZ4YVOEfpSOvPWRV+D/RfDTBPaf1U5qFu9H5WcUzyoUJakukvg1+WTUZ0LmdkFplOrel+yAd++QGbtguX8LftgY7qlDMuY7FvKqb3+TsAAvTXRot4tE1fw==",
-        vec![". 86400 IN SOA a.root-servers.net. nstld.verisign-grs.com. 2019032001 1800 900 604800 86400"],
-        ));
+        let (signer, rrset, rrsig) = mock_signed_rrs(SecAlg::RsaSha256);
+        // corrupt rrsig signature
+        let rrsig = corrupt_signature(&rrsig);
+        debug!("corrupt rrsig : {}", rrsig);
+        assert!(!verify_rrsig(&signer.dnskey, rrset, &rrsig, &signer.owner));
     }
 
     #[test]
-    #[ignore]
-    fn verify_rrsig_rsa_good_signature_1024() {
+    fn verify_rrsig_ecdsa_mixed_case() {
         init_logger();
-
-        assert!(verify_rrsig_helper(
-        "nz. 3046 IN DNSKEY 256 3 8 AwEAAbhtcqZIlIYHyCzbBU8sa3W8f+lTYW0gFa+E/VjNJoRJ0FUrClmMI9EPTqfM1ujAkNIbewRC36GHSQ65jlwonCafO4eHbbhkBMuuKvMe2bf7f/csQvQ1PS1kNgl5fRFVIrDbne9I5kAcyVXoSMzRipGClHkHn+yNi/FGkIwNjE0H",
-        "nz. 86400 IN RRSIG SOA 8 1 86400 20190406023219 20190322235821 16825 nz. XHH+w9a3vbmLFLvbi/5hXmQzCzIigGBZNIFDUOhOqaDbXbdSr602/iAglp7FXpcNxHefd2zfTM7kGQcuqbHwE72Kj5mcP8s+OHzWm1svxgMKQ0LJ6QnLy5B8DWR81bGEUuXIojNe4kRnUnJVJFew/7LCx6S4U51UprcrHuryYI8=",
-        vec!["nz. 86400 IN SOA loopback.dns.net.nz. soa.nzrs.net.nz. 2019032353 900 300 604800 3600"],
-        ));
+        let (signer, rrset, rrsig) = mock_signed_rrs_from_rrset(
+            "exaMpLe.Com",
+            SecAlg::EcdsaP256Sha256,
+            vec![" 3600 IN A 192.0.2.1", " 3600 IN A 192.0.2.2"],
+        );
+        assert!(verify_rrsig(&signer.dnskey, rrset, &rrsig, &signer.owner));
     }
 
-    #[test]
-    fn verify_rrsig_ecdsa_multiple_rr_good_signature() {
-        init_logger();
-
-        assert!(verify_rrsig_helper(
-        "cloudflare.com. 3600 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
-        "cloudflare.com. 3600 IN RRSIG DNSKEY 13 2 3600 20190408024840 20190207024840 2371 cloudflare.com. IaVqBxfybMOKi35lu6sa+iizrcTi8T7f/Jhgss1qcrD7FFaQZZAMtBXVQxq2uZXLxubLP+Zt9bCYUxMOxnb/Jw==",
-        vec![
-          "cloudflare.com. 3600 IN DNSKEY 256 3 13 oJMRESz5E4gYzS/q6XDrvU1qMPYIjCWzJaOau8XNEZeqCYKD5ar0IRd8KqXXFJkqmVfRvMGPmM1x8fGAa2XhSA==",
-          "cloudflare.com. 3600 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
-        ]
-        ));
-    }
-    #[test]
-    fn verify_rrsig_ecdsa_multiple_rr_mixed_case() {
-        init_logger();
-
-        assert!(verify_rrsig_helper(
-        "cloudFlare.com. 3600 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
-        "cloudflare.com. 3600 IN RRSIG DNSKEY 13 2 3600 20190408024840 20190207024840 2371 cloudflare.com. IaVqBxfybMOKi35lu6sa+iizrcTi8T7f/Jhgss1qcrD7FFaQZZAMtBXVQxq2uZXLxubLP+Zt9bCYUxMOxnb/Jw==",
-        vec![
-          "Cloudflare.com. 3600 IN DNSKEY 256 3 13 oJMRESz5E4gYzS/q6XDrvU1qMPYIjCWzJaOau8XNEZeqCYKD5ar0IRd8KqXXFJkqmVfRvMGPmM1x8fGAa2XhSA==",
-          "Cloudflare.com. 3600 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
-        ]
-        ));
-    }
     #[test]
     fn verify_rrsig_ecdsa_multiple_rr_wrong_order() {
         init_logger();
-
-        assert!(verify_rrsig_helper(
-        "cloudflare.com. 3600 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
-        "cloudflare.com. 3600 IN RRSIG DNSKEY 13 2 3600 20190408024840 20190207024840 2371 cloudflare.com. IaVqBxfybMOKi35lu6sa+iizrcTi8T7f/Jhgss1qcrD7FFaQZZAMtBXVQxq2uZXLxubLP+Zt9bCYUxMOxnb/Jw==",
-        vec![
-          "cloudflare.com. 3600 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
-          "cloudflare.com. 3600 IN DNSKEY 256 3 13 oJMRESz5E4gYzS/q6XDrvU1qMPYIjCWzJaOau8XNEZeqCYKD5ar0IRd8KqXXFJkqmVfRvMGPmM1x8fGAa2XhSA==",
-        ]
-        ));
+        let (signer, rrset, rrsig) = mock_signed_rrs_from_rrset(
+            "example.com",
+            SecAlg::EcdsaP256Sha256,
+            vec![" 3600 IN A 192.0.2.3", " 3600 IN A 192.0.2.2"],
+        );
+        assert!(verify_rrsig(&signer.dnskey, rrset, &rrsig, &signer.owner));
     }
 
     #[test]
     fn verify_rrsig_ecdsa_multiple_rr_wrong_ttl() {
         init_logger();
-
-        assert!(verify_rrsig_helper(
-        "cloudflare.com. 600 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
-        "cloudflare.com. 600 IN RRSIG DNSKEY 13 2 3600 20190408024840 20190207024840 2371 cloudflare.com. IaVqBxfybMOKi35lu6sa+iizrcTi8T7f/Jhgss1qcrD7FFaQZZAMtBXVQxq2uZXLxubLP+Zt9bCYUxMOxnb/Jw==",
-        vec![
-          "cloudflare.com. 600 IN DNSKEY 256 3 13 oJMRESz5E4gYzS/q6XDrvU1qMPYIjCWzJaOau8XNEZeqCYKD5ar0IRd8KqXXFJkqmVfRvMGPmM1x8fGAa2XhSA==",
-          "cloudflare.com. 600 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
-        ]
-        ));
+        let (signer, rrset, rrsig) = mock_signed_rrs_from_rrset(
+            "example.com",
+            SecAlg::EcdsaP256Sha256,
+            vec![" 3600 IN A 192.0.2.1", " 300 IN A 192.0.2.2"],
+        );
+        assert!(!verify_rrsig(&signer.dnskey, rrset, &rrsig, &signer.owner));
     }
 
     #[test]
     fn verify_rrsig_ecdsa_multiple_rr_wrong_class() {
         init_logger();
-
-        assert!(!verify_rrsig_helper(
-        "cloudflare.com. 3600 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
-        "cloudflare.com. 3600 IN RRSIG DNSKEY 13 2 3600 20190408024840 20190207024840 2371 cloudflare.com. IaVqBxfybMOKi35lu6sa+iizrcTi8T7f/Jhgss1qcrD7FFaQZZAMtBXVQxq2uZXLxubLP+Zt9bCYUxMOxnb/Jw==",
-        vec![
-          "cloudflare.com. 3600 CH TXT id.version 2001",
-        ]
-        ));
+        let (signer, rrset, rrsig) = mock_signed_rrs_from_rrset(
+            "example.com",
+            SecAlg::EcdsaP256Sha256,
+            vec![" 3600 IN A 192.0.2.1", " 300 IN AAAA 2001:DB8::1"],
+        );
+        assert!(!verify_rrsig(&signer.dnskey, rrset, &rrsig, &signer.owner));
     }
 
     #[test]
     fn verify_rrsig_ecdsa_multiple_rr_wrong_owner() {
         init_logger();
-
-        assert!(!verify_rrsig_helper(
-        "cloudflare.com. 600 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
-        "com. 600 IN RRSIG DNSKEY 13 2 3600 20190408024840 20190207024840 2371 cloudflare.com. IaVqBxfybMOKi35lu6sa+iizrcTi8T7f/Jhgss1qcrD7FFaQZZAMtBXVQxq2uZXLxubLP+Zt9bCYUxMOxnb/Jw==",
-        vec![
-          "cloudflare.com. 600 IN DNSKEY 256 3 13 oJMRESz5E4gYzS/q6XDrvU1qMPYIjCWzJaOau8XNEZeqCYKD5ar0IRd8KqXXFJkqmVfRvMGPmM1x8fGAa2XhSA==",
-          "cloudflare.com. 600 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
-        ]
-        ));
+        let (signer, rrset, rrsig) = mock_signed_rrs(SecAlg::EcdsaP256Sha256);
+        let rrsig_owner = Dname::from_str("evil.com").unwrap();
+        assert!(!verify_rrsig(&signer.dnskey, rrset, &rrsig, &rrsig_owner));
     }
 
     #[test]
     fn verify_rrsig_ecdsa_multiple_rr_wrong_type() {
         init_logger();
-
-        assert!(!verify_rrsig_helper(
-        "cloudflare.com. 600 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
-        "cloudflare.com. 600 IN RRSIG NS 13 2 3600 20190408024840 20190207024840 2371 cloudflare.com. IaVqBxfybMOKi35lu6sa+iizrcTi8T7f/Jhgss1qcrD7FFaQZZAMtBXVQxq2uZXLxubLP+Zt9bCYUxMOxnb/Jw==",
-        vec![
-          "cloudflare.com. 600 IN DNSKEY 256 3 13 oJMRESz5E4gYzS/q6XDrvU1qMPYIjCWzJaOau8XNEZeqCYKD5ar0IRd8KqXXFJkqmVfRvMGPmM1x8fGAa2XhSA==",
-          "cloudflare.com. 600 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
-        ]
-        ));
+        let (signer, rrset, rrsig) = mock_signed_rrs(SecAlg::EcdsaP256Sha256);
+        // change the covered type to NS
+        let rrsig = rdata::Rrsig::new(
+            Rtype::Ns,
+            rrsig.algorithm(),
+            rrsig.labels(),
+            rrsig.original_ttl(),
+            rrsig.expiration(),
+            rrsig.inception(),
+            rrsig.key_tag(),
+            rrsig.signer_name().clone(),
+            rrsig.signature().clone(),
+        );
+        debug!("mangled rrsig: {}", rrsig);
+        assert!(!verify_rrsig(&signer.dnskey, rrset, &rrsig, &signer.owner));
     }
 
     #[test]
     fn verify_rrsig_ecdsa_multiple_rr_wrong_keytag() {
         init_logger();
-
-        assert!(verify_rrsig_helper(
-        "cloudflare.com. 600 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
-        "cloudflare.com. 600 IN RRSIG DNSKEY 13 2 3600 20190408024840 20190207024840 2371 cloudflare.com. IaVqBxfybMOKi35lu6sa+iizrcTi8T7f/Jhgss1qcrD7FFaQZZAMtBXVQxq2uZXLxubLP+Zt9bCYUxMOxnb/Jw==",
-        vec![
-          "cloudflare.com. 600 IN DNSKEY 256 3 13 oJMRESz5E4gYzS/q6XDrvU1qMPYIjCWzJaOau8XNEZeqCYKD5ar0IRd8KqXXFJkqmVfRvMGPmM1x8fGAa2XhSA==",
-          "cloudflare.com. 600 IN DNSKEY 257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==",
-        ]
-        ));
+        let (signer, rrset, rrsig) = mock_signed_rrs(SecAlg::EcdsaP256Sha256);
+        let wrong_dnskey = Signer::new(signer.owner_str, SecAlg::EcdsaP256Sha256)
+            .unwrap()
+            .dnskey;
+        debug!("dnskey: {}", dnskey_str(&signer.owner, &wrong_dnskey));
+        assert!(!verify_rrsig(&wrong_dnskey, rrset, &rrsig, &signer.owner));
     }
 
     #[test]
@@ -930,19 +782,13 @@ mod tests {
     }
 
     #[test]
-    fn ecdsa_keypair_test() {
+    #[ignore]
+    fn verify_rrsig_rsa_good_signature_1024() {
         init_logger();
-
-        let signer = Signer::new("example.com", SecAlg::EcdsaP256Sha256).unwrap();
-        let rr = Record::new(signer.owner.clone(), Class::In, 300, signer.dnskey.clone());
-        let rrset = vec![rr];
-        for rr in &rrset {
-            debug!("rr: {}", &rr);
-        }
-
-        let rrsig = signer.sign(&rrset).unwrap();
-        debug!("rrsig : {}", rrsig);
-
-        assert!(verify_rrsig(&signer.dnskey, rrset, &rrsig, &signer.owner));
+        assert!(verify_rrsig_helper(
+        "nz. 3046 IN DNSKEY 256 3 8 AwEAAbhtcqZIlIYHyCzbBU8sa3W8f+lTYW0gFa+E/VjNJoRJ0FUrClmMI9EPTqfM1ujAkNIbewRC36GHSQ65jlwonCafO4eHbbhkBMuuKvMe2bf7f/csQvQ1PS1kNgl5fRFVIrDbne9I5kAcyVXoSMzRipGClHkHn+yNi/FGkIwNjE0H",
+        "nz. 86400 IN RRSIG SOA 8 1 86400 20190406023219 20190322235821 16825 nz. XHH+w9a3vbmLFLvbi/5hXmQzCzIigGBZNIFDUOhOqaDbXbdSr602/iAglp7FXpcNxHefd2zfTM7kGQcuqbHwE72Kj5mcP8s+OHzWm1svxgMKQ0LJ6QnLy5B8DWR81bGEUuXIojNe4kRnUnJVJFew/7LCx6S4U51UprcrHuryYI8=",
+        vec!["nz. 86400 IN SOA loopback.dns.net.nz. soa.nzrs.net.nz. 2019032353 900 300 604800 3600"],
+        ));
     }
 }
