@@ -27,22 +27,31 @@ where
     let inception = rrsig.inception();
     let expiration = rrsig.expiration();
     let type_covered = rrsig.type_covered();
+    let rrsig_orig_ttl = rrsig.original_ttl();
+    let rrsig_keytag = rrsig.key_tag();
 
     // Generate a rrsig with empty signature
     let rrsig_rdata_nosig = rdata::Rrsig::new(
         type_covered,
         rrsig_algo,
         rrsig.labels(),
-        rrsig.original_ttl(),
+        rrsig_orig_ttl,
         expiration,
         inception,
-        rrsig.key_tag(),
+        rrsig_keytag,
         rrsig.signer_name().clone(),
         Bytes::new(),
     );
 
     // return false if the rrsig inception and expiration is out of bounds
     if !rrsig_datetime_is_valid(inception, expiration) {
+        return false;
+    }
+
+    // return false if the dnskey keytag and rrsig keytag doesn't match
+    let keytag = dnskey_keytag(pubkey);
+    if keytag != rrsig_keytag {
+        debug!("keytag for public({}) != rrsig({})", keytag, rrsig_keytag);
         return false;
     }
 
