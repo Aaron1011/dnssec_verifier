@@ -31,19 +31,6 @@ where
     let rrsig_orig_ttl = rrsig.original_ttl();
     let rrsig_keytag = rrsig.key_tag();
 
-    // Generate a rrsig with empty signature
-    let rrsig_rdata_nosig = rdata::Rrsig::new(
-        type_covered,
-        rrsig_algo,
-        rrsig.labels(),
-        rrsig_orig_ttl,
-        expiration,
-        inception,
-        rrsig_keytag,
-        rrsig.signer_name().clone(),
-        Bytes::new(),
-    );
-
     // return false if the rrsig inception and expiration is out of bounds
     if !rrsig_datetime_is_valid(inception, expiration) {
         return false;
@@ -86,6 +73,19 @@ where
             return false;
         }
     }
+
+    // Generate a rrsig with empty signature
+    let rrsig_rdata_nosig = rdata::Rrsig::new(
+        type_covered,
+        rrsig_algo,
+        rrsig.labels(),
+        rrsig_orig_ttl,
+        expiration,
+        inception,
+        rrsig_keytag,
+        rrsig.signer_name().clone(),
+        Bytes::new(),
+    );
 
     // buffer to hold DNS binary message for verification
     let mut message = vec![];
