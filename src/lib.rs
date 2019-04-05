@@ -79,6 +79,7 @@ where
             return false;
         }
 
+        // Make sure the TTL of all RRs are same with RRSIG original TTL
         let rr_ttl = rr.ttl();
         if rrsig_orig_ttl != rr_ttl {
             debug!("ttl({}) != rrsig ttl({})", rr_ttl, rrsig_orig_ttl);
@@ -144,6 +145,7 @@ where
     }
 }
 
+// Converts a Dname to canonical format, i.e., lowercase
 fn canonical_owner<N>(owner: &N) -> Dname
 where
     N: ToDname + Clone,
@@ -259,6 +261,7 @@ pub fn ecdsa_keypair(rng: &rand::SystemRandom) -> ring::signature::EcdsaKeyPair 
     signature::EcdsaKeyPair::from_pkcs8(alg, untrusted::Input::from(pkcs8.as_ref())).unwrap()
 }
 
+// unfortunately ring doesn't support generating a new keypair
 pub fn rsa_keypair() -> ring::signature::RsaKeyPair {
     let b = base64::decode(
         &"
@@ -303,6 +306,7 @@ pub fn ecdsa_dnskey_pubkey(keypair: &impl ring::signature::KeyPair) -> Bytes {
     Bytes::from(&b[1..])
 }
 
+// see https://tools.ietf.org/html/rfc3110#section-2 for dnskey format
 pub fn rsa_pubkey_from_keypair(keypair: &ring::signature::RsaKeyPair) -> Bytes {
     let pubkey = signature::KeyPair::public_key(keypair);
     let modulus = pubkey
