@@ -593,19 +593,11 @@ mod tests {
 
     // helper to generate test data
     fn mock_signed_rrs(secalg: SecAlg) -> (Signer<'static>, Vec<MasterRecord>, rdata::Rrsig) {
-        let signer = Signer::new("example.com", secalg).unwrap();
-        debug!("dnskey : {}", dnskey_str(&signer.owner, &signer.dnskey));
-        let rrset = rrset_with_owner(
-            &signer.owner,
+        mock_signed_rrs_from_rrset(
+            "example.com",
+            secalg,
             vec![" 3600 IN A 192.0.2.1", " 3600 IN A 192.0.2.2"],
-        );
-        for rr in &rrset {
-            debug!("{}", rr);
-        }
-        let rrsig = signer.sign(&rrset).unwrap();
-        debug!("rrsig : {}", rrsig);
-
-        (signer, rrset, rrsig)
+        )
     }
 
     fn mock_signed_rrs_from_rrset(
