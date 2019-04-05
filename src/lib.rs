@@ -77,6 +77,12 @@ where
             debug!("rrsig doesn't cover type {}", rr.rtype());
             return false;
         }
+
+        let rr_ttl = rr.ttl();
+        if rrsig_orig_ttl != rr_ttl {
+            debug!("ttl({}) != rrsig ttl({})", rr_ttl, rrsig_orig_ttl);
+            return false;
+        }
     }
 
     // buffer to hold DNS binary message for verification
