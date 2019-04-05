@@ -9,7 +9,7 @@ log = "*"
 env_logger = "*"
 ring = "*"
 untrusted = "*"
-domain= {git = "https://github.com/vendemiat/domain", branch="vicky/enable_dnssec_query"}
+domain= {git = "https://github.com/vendemiat/domain"}
 bytes = "*"
 base64 = "*"
 chrono = "0.4"
