@@ -19,3 +19,6 @@ panic = "abort"
 
 [profile.release]
 panic = "abort"
+
+[patch.crates-io]
+ring = { git = "file:///home/vicky/public-repos/ring", branch = "rsa_1024"}

@@ -121,7 +121,7 @@ where
             let e = untrusted::Input::from(e);
             let m = untrusted::Input::from(m);
             signature::primitive::verify_rsa(
-                &signature::RSA_PKCS1_2048_8192_SHA256,
+                &signature::RSA_PKCS1_1024_8192_SHA256,
                 (m, e),
                 message,
                 sig,
@@ -788,8 +788,8 @@ mod tests {
         init_logger();
         assert!(verify_rrsig_helper(
         "nz. 3046 IN DNSKEY 256 3 8 AwEAAbhtcqZIlIYHyCzbBU8sa3W8f+lTYW0gFa+E/VjNJoRJ0FUrClmMI9EPTqfM1ujAkNIbewRC36GHSQ65jlwonCafO4eHbbhkBMuuKvMe2bf7f/csQvQ1PS1kNgl5fRFVIrDbne9I5kAcyVXoSMzRipGClHkHn+yNi/FGkIwNjE0H",
-        "nz. 86400 IN RRSIG SOA 8 1 86400 20190406023219 20190322235821 16825 nz. XHH+w9a3vbmLFLvbi/5hXmQzCzIigGBZNIFDUOhOqaDbXbdSr602/iAglp7FXpcNxHefd2zfTM7kGQcuqbHwE72Kj5mcP8s+OHzWm1svxgMKQ0LJ6QnLy5B8DWR81bGEUuXIojNe4kRnUnJVJFew/7LCx6S4U51UprcrHuryYI8=",
-        vec!["nz. 86400 IN SOA loopback.dns.net.nz. soa.nzrs.net.nz. 2019032353 900 300 604800 3600"],
+        "nz.                     86400   IN      RRSIG   SOA 8 1 86400 20190501045720 20190416051121 16825 nz. hHvf8vJCshvqqWC3FIKxNTVNVvLEjl15Rc5Kiy8P2ZVTwEjWmDSgH57ISHrl8ACBQ8L2LMflW4gXtCJkyrXpRMUXgKwaqkIal5LBuAGiAdqtmOYST0NLO929qnhfRtVlqosajeKADE9G01yoxUKF7cSMsSn2kW7GOulKEiNyFMg=",
+        vec!["nz.                     86400   IN      SOA     loopback.dns.net.nz. soa.nzrs.net.nz. 2019041670 900 300 604800 3600"],
         ));
     }
 }
