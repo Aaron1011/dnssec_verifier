@@ -266,9 +266,26 @@ pub fn ecdsa_keypair(rng: &rand::SystemRandom) -> ring::signature::EcdsaKeyPair 
 }
 
 // unfortunately ring doesn't support generating a new keypair
-pub fn rsa_keypair() -> ring::signature::RsaKeyPair {
-    let b = base64::decode(
-        &"
+pub fn rsa_keypair(keylen: u32) -> ring::signature::RsaKeyPair {
+    let private_key = match keylen {
+        1024 => {
+            "
+MIICXQIBAAKBgQCy9Klb+0bPToaq7EcwixffI+iz0ImlLomnY5l13B9UPsy3dN0X
+Id3UIClG2LU3Q9EhUolrFyvrYEiqvMXusoHuCPTlLA2f5YfG77Icn2jA4TblYeq8
+8Pni34d+rsvHynueyemURBTwX1gS342rg+D93xCHBJ1ctNBN8OpxzG5nAwIDAQAB
+AoGBAInmq1NsMMazVmcEKF+p771N6JYYDtmxIPZSdAE0nRfIROziKzUWLeC239fu
+SsbJhbBN8AMMGhYJXjXjvgsQl7nRvrwDv+8uNAqzu7uSX6ucxaDYM5DHhRbLLQ2k
+R1Q7Z0fKqHR+6GKMIA94LFYa/BTLr54IoYRhMz/Zq2MH3LjxAkEA47Y/7AEjrOTU
+ggufJzj1lioloGq/70kVqJj5nh5bORafPIgDWCxc0Lg0YVhGwCDA4FcpNW94eo7v
+6ayr9M/ADwJBAMkv2uYvFQ3Y2ObE9X7HxrAsE/woVqc/kPtr0u4UuEGRlxakILRy
+sSh6mmS42rnn4TmgAIa+d6n4Xel/6TVJtc0CQQDdpvxnzOAeHoxgndFoy3/6kMIZ
+eW+lCz4C5A0uhZwEYOnVcQvYWy5pmLScAOK1h+xXM2CQfBYJLnOHwSWM4mCvAkAD
+Fpb3nZVnJwL9V9yk25AzOBn+bugVnSYuldMhEHRbnU6CbHaMDo6lnmwsS6If5G1S
+oyAe8WGI3GUkpm///2epAkBQpgZdcyTZJMH6a9EePepyUK/dJizY+syRrVSoEk1I
+Tzaxhf9ONEvsQ+ecuKAYhcXiYAqZksUf9746Yb6OTMiD"
+        }
+        2048 => {
+            "
 MIIEpAIBAAKCAQEA4W8gkDyQZCWoFSAxiUmyrIA7H9tpd1EHkGxBDrpIOf+OT57s
 AA5ROIZwwaPn5pqurU69tVbIglt/BKk1gwlFz3qGmGb1feaiqAhTGvan3yT2j+Qi
 WxQz0VNxuZPhiKEQCk+QrCvZMV29q4gROVnIYC2T3+XQptu3+zzkfGTqCy5KkizW
@@ -293,11 +310,15 @@ I3d2ezIjuaghpCUv3PyX1jWNiLKr1L806iAK1KsCgYAbwGa1UEjo7jzW4xAyRq0i
 mcULDcrgmjvW5tuBjiRasFFVSy0bemZzxu6S12/6/3GfK33JFNs4gAdwHa4DOpi8
 gMlU6QKBgQChi/b3efERN1n4BpKZOXC+Fh53aAcA59aH3SAFFvJn9+zIEhfk327q
 aYrWpkyQFWwA2e4M5WEw7xuEbWXtvNg39YlDxVRlYY6PK7wrSGw7FhDaEMfjkPA0
-PvJwvKhYPuBDSMSrYa28c6Q9F+SjUjKvm81lyIo+k86hLBfjCxNgVA==
-"
-        .replace('\n', ""),
-    )
-    .expect("error decoding base64");
+PvJwvKhYPuBDSMSrYa28c6Q9F+SjUjKvm81lyIo+k86hLBfjCxNgVA=="
+        }
+        _ => {
+            debug!("unknown key length");
+            ""
+        }
+    };
+
+    let b = base64::decode(&private_key.replace('\n', "")).expect("error decoding base64");
     signature::RsaKeyPair::from_der(untrusted::Input::from(&b))
         .expect("error building rsa key from DER")
 }
@@ -537,7 +558,7 @@ mod tests {
                 }
 
                 SecAlg::RsaSha256 => {
-                    let keypair = rsa_keypair();
+                    let keypair = rsa_keypair(2048);
                     let pubkey = rsa_pubkey_from_keypair(&keypair);
                     return Some(Signer {
                         secalg,
@@ -558,6 +579,30 @@ mod tests {
                     });
                 }
                 _ => return None,
+            }
+        }
+
+        fn new_rsa(owner_str: &str, keylen: u32) -> Signer {
+            let rng = rand::SystemRandom::new();
+            let protocol = 3;
+            let flag = 256;
+            let keypair = rsa_keypair(keylen);
+            let pubkey = rsa_pubkey_from_keypair(&keypair);
+            Signer {
+                secalg: SecAlg::RsaSha256,
+                rng,
+                keypair: KeyPair::Rsa(keypair),
+                pubkey: pubkey.clone(),
+                owner_str,
+                owner: Dname::from_str(owner_str).unwrap(),
+                protocol,
+                flag,
+                dnskey: rdata::Dnskey::new(
+                    flag,
+                    protocol,
+                    SecAlg::RsaSha256,
+                    bytes::Bytes::from(pubkey),
+                ),
             }
         }
 
@@ -783,13 +828,19 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn verify_rrsig_rsa_good_signature_1024() {
         init_logger();
-        assert!(verify_rrsig_helper(
-        "nz. 3046 IN DNSKEY 256 3 8 AwEAAbhtcqZIlIYHyCzbBU8sa3W8f+lTYW0gFa+E/VjNJoRJ0FUrClmMI9EPTqfM1ujAkNIbewRC36GHSQ65jlwonCafO4eHbbhkBMuuKvMe2bf7f/csQvQ1PS1kNgl5fRFVIrDbne9I5kAcyVXoSMzRipGClHkHn+yNi/FGkIwNjE0H",
-        "nz.                     86400   IN      RRSIG   SOA 8 1 86400 20190501045720 20190416051121 16825 nz. hHvf8vJCshvqqWC3FIKxNTVNVvLEjl15Rc5Kiy8P2ZVTwEjWmDSgH57ISHrl8ACBQ8L2LMflW4gXtCJkyrXpRMUXgKwaqkIal5LBuAGiAdqtmOYST0NLO929qnhfRtVlqosajeKADE9G01yoxUKF7cSMsSn2kW7GOulKEiNyFMg=",
-        vec!["nz.                     86400   IN      SOA     loopback.dns.net.nz. soa.nzrs.net.nz. 2019041670 900 300 604800 3600"],
-        ));
+
+        let signer = Signer::new_rsa("example.com", 1024);
+        debug!("dnskey : {}", dnskey_str(&signer.owner, &signer.dnskey));
+        let rrset = vec![" 3600 IN A 192.0.2.1", " 3600 IN A 192.0.2.2"];
+        let rrset = rrset_with_owner(&signer.owner, rrset);
+        for rr in &rrset {
+            debug!("{}", rr);
+        }
+        let rrsig = signer.sign(&rrset).unwrap();
+        debug!("rrsig : {}", rrsig);
+
+        assert!(verify_rrsig(&signer.dnskey, rrset, &rrsig, &signer.owner));
     }
 }
