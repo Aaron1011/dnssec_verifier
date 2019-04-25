@@ -479,12 +479,17 @@ mod tests {
         rrset
     }
 
+    enum KeyPair {
+        Ecdsa(signature::EcdsaKeyPair),
+        Rsa(signature::RsaKeyPair),
+        Rsa1024(signature::RsaKeyPair),
+    }
+
     // Mock Signer to generate verifiable RRSIGs
     struct Signer<'a> {
         pub secalg: SecAlg,
         pub rng: rand::SystemRandom,
-        pub ecdsa_keypair: Option<signature::EcdsaKeyPair>,
-        pub rsa_keypair: Option<signature::RsaKeyPair>,
+        pub keypair: KeyPair,
         pub pubkey: Bytes,
         pub owner_str: &'a str,
         pub owner: Dname,
@@ -506,8 +511,7 @@ mod tests {
                     Some(Signer {
                         secalg,
                         rng,
-                        ecdsa_keypair: Some(keypair),
-                        rsa_keypair: None,
+                        keypair: KeyPair::Ecdsa(keypair),
                         pubkey: pubkey.clone(),
                         owner_str,
                         owner: Dname::from_str(owner_str).unwrap(),
@@ -528,8 +532,7 @@ mod tests {
                     return Some(Signer {
                         secalg,
                         rng,
-                        ecdsa_keypair: None,
-                        rsa_keypair: Some(keypair),
+                        keypair: KeyPair::Rsa(keypair),
                         pubkey: pubkey.clone(),
                         owner_str,
                         owner: Dname::from_str(owner_str).unwrap(),
@@ -569,20 +572,12 @@ mod tests {
             let mut sorted_rrset_bytes = prepare_rrset_to_sign(rrset.clone(), rrsig.original_ttl());
             message.append(&mut sorted_rrset_bytes);
 
-            let mut signature: Vec<u8> = vec![0];
-            match self.secalg {
-                SecAlg::EcdsaP256Sha256 => {
-                    if let Some(keypair) = &self.ecdsa_keypair {
-                        signature = ecdsa_sign(&self.rng, &keypair, message);
-                    }
-                }
-                SecAlg::RsaSha256 => {
-                    if let Some(keypair) = &self.rsa_keypair {
-                        signature = rsa_sign(&self.rng, &keypair, message);
-                    }
-                }
-                _ => return None,
-            }
+            //let mut signature: Vec<u8> = vec![0];
+            let signature = match &self.keypair {
+                KeyPair::Ecdsa(keypair) => ecdsa_sign(&self.rng, &keypair, message),
+                KeyPair::Rsa(keypair) => rsa_sign(&self.rng, &keypair, message),
+                _ => vec![0],
+            };
             Some(new_rrsig_with_signature(&rrsig, signature))
         }
     }
