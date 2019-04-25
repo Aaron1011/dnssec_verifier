@@ -418,35 +418,6 @@ mod tests {
         Some(rrs[0].clone())
     }
 
-    fn verify_rrsig_helper(dnskey: &str, rrsig: &str, rrs: Vec<&str>) -> bool {
-        let dnskey = take_one_rr(dnskey).expect("error getting dnskey");
-        let rrsig = take_one_rr(rrsig).expect("error getting rrsig");
-        let mut rrset = vec![];
-        if !rrs.is_empty() {
-            for s in rrs {
-                let rr = take_one_rr(s).expect("error getting rr");
-                rrset.push(rr);
-            }
-        }
-
-        let pubkey: Option<rdata::Dnskey> = match dnskey.into_data() {
-            MasterRecordData::Dnskey(rr) => Some(rr),
-            _ => None,
-        };
-
-        let sig = match rrsig.data() {
-            MasterRecordData::Rrsig(rr) => Some(rr),
-            _ => None,
-        };
-
-        verify_rrsig(
-            &pubkey.expect("no dnskey found"),
-            rrset,
-            &sig.expect("no rrsig found"),
-            rrsig.owner(),
-        )
-    }
-
     fn new_rrsig(
         owner: Dname,
         ttl: u32,
