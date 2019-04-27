@@ -116,7 +116,8 @@ where
     let res = match rrsig_algo.to_int() {
         8 => {
             // Extract public key exponent and modulus
-            let (e, m) = rsa_exponent_modulus(&key).unwrap();
+            let (e, m) = rsa_exponent_modulus(&key)
+                .expect("error extracting exponent and modulus from public key");
             let e = untrusted::Input::from(e);
             let m = untrusted::Input::from(m);
             signature::primitive::verify_rsa(
@@ -153,10 +154,12 @@ where
     let mut dname_builder = DnameBuilder::new();
     for label in owner.to_name().iter() {
         let m: Vec<u8> = label.iter().map(u8::to_ascii_lowercase).collect();
-        let label = Label::from_slice(&m).unwrap();
-        dname_builder.append_label(label).unwrap();
+        let label = Label::from_slice(&m).expect("error building label from labels slice");
+        dname_builder
+            .append_label(label)
+            .expect("error appending label to dname builder");
     }
-    dname_builder.into_dname().unwrap()
+    dname_builder.into_dname().expect("error building dname")
 }
 
 // prepares dns message from sorted rrset
@@ -189,7 +192,7 @@ where
     // returns
     // a[0] = vec![1,2,3]
     // a[1] = vec![4,5,6]
-    rr_data.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    rr_data.sort_by(|a, b| a.partial_cmp(b).expect("error sorting rrset"));
 
     // Collapse sorted multi dimension byte vector
     // a[0] = vec![1,2,3]
@@ -238,7 +241,7 @@ pub fn ecdsa_sign(
 ) -> Vec<u8> {
     keypair
         .sign(rng, untrusted::Input::from(&message))
-        .unwrap()
+        .expect("error signing with ecdsa")
         .as_ref()
         .to_owned()
 }
@@ -251,14 +254,15 @@ pub fn rsa_sign(
     let mut sig = vec![0; keypair.public_modulus_len()];
     keypair
         .sign(&signature::RSA_PKCS1_SHA256, rng, &message, &mut sig)
-        .unwrap();
+        .expect("error signing with rsa");
     sig
 }
 
 pub fn ecdsa_keypair(rng: &rand::SystemRandom) -> ring::signature::EcdsaKeyPair {
     let alg = &signature::ECDSA_P256_SHA256_FIXED_SIGNING;
-    let pkcs8 = signature::EcdsaKeyPair::generate_pkcs8(alg, rng).unwrap();
-    signature::EcdsaKeyPair::from_pkcs8(alg, untrusted::Input::from(pkcs8.as_ref())).unwrap()
+    let pkcs8 = signature::EcdsaKeyPair::generate_pkcs8(alg, rng).expect("error generating pkcs8");
+    signature::EcdsaKeyPair::from_pkcs8(alg, untrusted::Input::from(pkcs8.as_ref()))
+        .expect("error building ecdsa from pkcs8")
 }
 
 // unfortunately ring doesn't support generating a new keypair
@@ -293,8 +297,9 @@ PvJwvKhYPuBDSMSrYa28c6Q9F+SjUjKvm81lyIo+k86hLBfjCxNgVA==
 "
         .replace('\n', ""),
     )
-    .unwrap();
-    signature::RsaKeyPair::from_der(untrusted::Input::from(&b)).unwrap()
+    .expect("error decoding base64");
+    signature::RsaKeyPair::from_der(untrusted::Input::from(&b))
+        .expect("error building rsa key from DER")
 }
 
 // remove leading 0x4 from ecdsa pub key for dnskey rdata
@@ -393,12 +398,12 @@ mod tests {
     }
 
     fn verify_rrsig_helper(dnskey: &str, rrsig: &str, rrs: Vec<&str>) -> bool {
-        let dnskey = take_one_rr(dnskey).unwrap();
-        let rrsig = take_one_rr(rrsig).unwrap();
+        let dnskey = take_one_rr(dnskey).expect("error getting dnskey");
+        let rrsig = take_one_rr(rrsig).expect("error getting rrsig");
         let mut rrset = vec![];
         if !rrs.is_empty() {
             for s in rrs {
-                let rr = take_one_rr(s).unwrap();
+                let rr = take_one_rr(s).expect("error getting rr");
                 rrset.push(rr);
             }
         }
@@ -413,7 +418,12 @@ mod tests {
             _ => None,
         };
 
-        verify_rrsig(&pubkey.unwrap(), rrset, &sig.unwrap(), rrsig.owner())
+        verify_rrsig(
+            &pubkey.expect("no dnskey found"),
+            rrset,
+            &sig.expect("no rrsig found"),
+            rrsig.owner(),
+        )
     }
 
     fn new_rrsig(
@@ -473,7 +483,7 @@ mod tests {
         let mut rrset = vec![];
 
         for s in data {
-            let rr = take_one_rr(&record_with_owner(owner, s)).unwrap();
+            let rr = take_one_rr(&record_with_owner(owner, s)).expect("error getting rr");
             rrset.push(rr);
         }
         rrset
@@ -482,7 +492,6 @@ mod tests {
     enum KeyPair {
         Ecdsa(signature::EcdsaKeyPair),
         Rsa(signature::RsaKeyPair),
-        Rsa1024(signature::RsaKeyPair),
     }
 
     // Mock Signer to generate verifiable RRSIGs
@@ -514,7 +523,8 @@ mod tests {
                         keypair: KeyPair::Ecdsa(keypair),
                         pubkey: pubkey.clone(),
                         owner_str,
-                        owner: Dname::from_str(owner_str).unwrap(),
+                        owner: Dname::from_str(owner_str)
+                            .expect("error building dname from string"),
                         protocol,
                         flag,
                         dnskey: rdata::Dnskey::new(
@@ -535,7 +545,8 @@ mod tests {
                         keypair: KeyPair::Rsa(keypair),
                         pubkey: pubkey.clone(),
                         owner_str,
-                        owner: Dname::from_str(owner_str).unwrap(),
+                        owner: Dname::from_str(owner_str)
+                            .expect("error building dname from string"),
                         protocol,
                         flag,
                         dnskey: rdata::Dnskey::new(
@@ -576,7 +587,6 @@ mod tests {
             let signature = match &self.keypair {
                 KeyPair::Ecdsa(keypair) => ecdsa_sign(&self.rng, &keypair, message),
                 KeyPair::Rsa(keypair) => rsa_sign(&self.rng, &keypair, message),
-                _ => vec![0],
             };
             Some(new_rrsig_with_signature(&rrsig, signature))
         }
@@ -604,13 +614,13 @@ mod tests {
         secalg: SecAlg,
         rrset: Vec<&str>,
     ) -> (Signer<'static>, Vec<MasterRecord>, rdata::Rrsig) {
-        let signer = Signer::new(owner, secalg).unwrap();
+        let signer = Signer::new(owner, secalg).expect("error creating signer");
         debug!("dnskey : {}", dnskey_str(&signer.owner, &signer.dnskey));
         let rrset = rrset_with_owner(&signer.owner, rrset);
         for rr in &rrset {
             debug!("{}", rr);
         }
-        let rrsig = signer.sign(&rrset).unwrap();
+        let rrsig = signer.sign(&rrset).expect("error signing");
         debug!("rrsig : {}", rrsig);
 
         (signer, rrset, rrsig)
@@ -698,7 +708,7 @@ mod tests {
     fn verify_rrsig_ecdsa_multiple_rr_wrong_owner() {
         init_logger();
         let (signer, rrset, rrsig) = mock_signed_rrs(SecAlg::EcdsaP256Sha256);
-        let rrsig_owner = Dname::from_str("evil.com").unwrap();
+        let rrsig_owner = Dname::from_str("evil.com").expect("error building dname from string");
         assert!(!verify_rrsig(&signer.dnskey, rrset, &rrsig, &rrsig_owner));
     }
 
@@ -727,7 +737,7 @@ mod tests {
         init_logger();
         let (signer, rrset, rrsig) = mock_signed_rrs(SecAlg::EcdsaP256Sha256);
         let wrong_dnskey = Signer::new(signer.owner_str, SecAlg::EcdsaP256Sha256)
-            .unwrap()
+            .expect("error building signer")
             .dnskey;
         debug!("dnskey: {}", dnskey_str(&signer.owner, &wrong_dnskey));
         assert!(!verify_rrsig(&wrong_dnskey, rrset, &rrsig, &signer.owner));
@@ -762,12 +772,12 @@ mod tests {
 
     #[test]
     fn dnskey_keytag_test() {
-        let dnskey = take_one_rr("cloudflare.com. 600 IN DNSKEY 256 3 13 oJMRESz5E4gYzS/q6XDrvU1qMPYIjCWzJaOau8XNEZeqCYKD5ar0IRd8KqXXFJkqmVfRvMGPmM1x8fGAa2XhSA==").unwrap();
+        let dnskey = take_one_rr("cloudflare.com. 600 IN DNSKEY 256 3 13 oJMRESz5E4gYzS/q6XDrvU1qMPYIjCWzJaOau8XNEZeqCYKD5ar0IRd8KqXXFJkqmVfRvMGPmM1x8fGAa2XhSA==").expect("error getting rr");
         let pubkey: Option<rdata::Dnskey> = match dnskey.into_data() {
             MasterRecordData::Dnskey(rr) => Some(rr),
             _ => None,
         };
-        let keytag = dnskey_keytag(&pubkey.unwrap());
+        let keytag = dnskey_keytag(&pubkey.expect("no dnskey found"));
         debug!("{}", keytag);
         assert_eq!(keytag, 34505);
     }
